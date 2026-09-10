@@ -1,0 +1,6 @@
+# Scratch. Working notes, intermediate output, anything that is not the project.
+/tmp/
+
+# Build output.
+/bivy
+/dist/
