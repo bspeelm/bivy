@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +28,10 @@ func at(day int) time.Time { return time.Date(2026, 9, day, 12, 0, 0, 0, time.UT
 // imported by one package (PLAN.md §0), and reaching for httptest here would
 // break the budget that makes the privacy claim checkable.
 type stubFeeds struct {
+	// Guarded because bivy fetches feeds concurrently, which is the whole
+	// point of fetchAll. A test double for a concurrent caller is itself
+	// concurrent code.
+	mu       sync.Mutex
 	channels map[string]media.Channel
 	handles  map[string]string
 	fetched  []string
@@ -34,6 +39,9 @@ type stubFeeds struct {
 }
 
 func (s *stubFeeds) Fetch(_ context.Context, id string) (media.Channel, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.fetched = append(s.fetched, id)
 	if s.failWith != nil {
 		return media.Channel{}, s.failWith
@@ -45,7 +53,35 @@ func (s *stubFeeds) Fetch(_ context.Context, id string) (media.Channel, error) {
 	return ch, nil
 }
 
+// setChannel replaces a channel's feed while bivy may be reading it.
+func (s *stubFeeds) setChannel(id string, ch media.Channel) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.channels[id] = ch
+}
+
+func (s *stubFeeds) removeChannel(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.channels, id)
+}
+
+func (s *stubFeeds) fail(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failWith = err
+}
+
+func (s *stubFeeds) asked() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.fetched...)
+}
+
 func (s *stubFeeds) Resolve(_ context.Context, handle string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	id, ok := s.handles[handle]
 	if !ok {
 		return "", errors.New("no identifier on the page")
@@ -140,9 +176,9 @@ func TestFollowThenDashboard(t *testing.T) {
 	}
 
 	// A later entry is new the next time.
-	h.feeds.channels[chanA] = media.Channel{ID: chanA, Title: "Aye", Videos: []media.Video{
+	h.feeds.setChannel(chanA, media.Channel{ID: chanA, Title: "Aye", Videos: []media.Video{
 		{ID: "ddddddddddd", Title: "Posted since", Published: at(11)},
-	}}
+	}})
 	h.app.now = func() time.Time { return at(12) }
 
 	got = h.run(t)
@@ -189,8 +225,8 @@ func TestFollowRefusesWhatIsNotAChannel(t *testing.T) {
 			t.Errorf("follow %q reported success: %s", bad, out)
 		}
 	}
-	if len(h.feeds.fetched) != 0 {
-		t.Errorf("a refused argument still reached the network: %v", h.feeds.fetched)
+	if asked := h.feeds.asked(); len(asked) != 0 {
+		t.Errorf("a refused argument still reached the network: %v", asked)
 	}
 }
 
@@ -260,7 +296,7 @@ func TestOneUnreachableChannelDoesNotCostTheDashboard(t *testing.T) {
 	h.run(t, "follow", chanA)
 	h.run(t, "follow", chanB)
 
-	delete(h.feeds.channels, chanB)
+	h.feeds.removeChannel(chanB)
 
 	got := h.run(t)
 	if !strings.Contains(got, "The newest thing") {
@@ -280,17 +316,17 @@ func TestAFailedFetchDoesNotConsumeWhatIsNew(t *testing.T) {
 	h := newHarness(t)
 	h.run(t, "follow", chanA)
 
-	h.feeds.channels[chanA] = media.Channel{ID: chanA, Title: "Aye", Videos: []media.Video{
+	h.feeds.setChannel(chanA, media.Channel{ID: chanA, Title: "Aye", Videos: []media.Video{
 		{ID: "ddddddddddd", Title: "Posted since", Published: at(11)},
-	}}
+	}})
 	h.app.now = func() time.Time { return at(12) }
 
-	h.feeds.failWith = errors.New("the network is down")
+	h.feeds.fail(errors.New("the network is down"))
 	if _, out := h.code(); !strings.Contains(out, "could not be reached") {
 		t.Errorf("the outage was not reported:\n%s", out)
 	}
 
-	h.feeds.failWith = nil
+	h.feeds.fail(nil)
 	if got := h.run(t); !strings.Contains(got, "1 new video") {
 		t.Errorf("the entry stopped being new while the network was down:\n%s", got)
 	}

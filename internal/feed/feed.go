@@ -103,11 +103,9 @@ var channelIDIn = []*regexp.Regexp{
 
 var handleShape = regexp.MustCompile(`^@[A-Za-z0-9._-]{1,60}$`)
 
-// Resolve turns a handle into the channel identifier its feed is keyed by.
-//
-// The one request bivy makes for a page meant for a browser, which is why
-// ADR-008 exists. It happens when a channel is followed and never at launch,
-// and a failure is not fatal: the caller is told to pass an identifier.
+// Resolve turns a handle into the channel identifier its feed is keyed by. The
+// one request bivy makes for a page meant for a browser (ADR-008): it happens
+// when a channel is followed, never at launch, and a failure is not fatal.
 func (c *Client) Resolve(ctx context.Context, handle string) (string, error) {
 	if !handleShape.MatchString(handle) {
 		return "", fmt.Errorf("%q is not a handle", handle)

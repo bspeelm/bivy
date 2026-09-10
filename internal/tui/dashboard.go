@@ -17,6 +17,23 @@ import (
 	"github.com/bspeelm/bivy/internal/follow"
 )
 
+// Move returns the row the cursor lands on, clamped to the list. Here rather
+// than in the loop that reads keys, because "what does down do at the bottom"
+// is answered by a test rather than by pressing it.
+func Move(selected, delta, rows int) int {
+	if rows == 0 {
+		return 0
+	}
+	next := selected + delta
+	if next < 0 {
+		return 0
+	}
+	if next >= rows {
+		return rows - 1
+	}
+	return next
+}
+
 // Dashboard is what launching bivy shows.
 type Dashboard struct {
 	Rows []follow.Row
@@ -28,6 +45,17 @@ type Dashboard struct {
 	Now time.Time
 	// Width is the terminal width to lay out for. Zero means the default.
 	Width int
+	// Height is how many rows the terminal has. Zero means show everything,
+	// which is what the non-interactive listing does.
+	Height int
+	// Selected is the row under the cursor.
+	Selected int
+	// Status is a line shown under the list: what is playing, or what went
+	// wrong with the last thing that was asked for.
+	Status string
+	// Interactive draws the cursor and the key hints. Without it the same
+	// model renders as a plain listing, which is what a pipe gets.
+	Interactive bool
 }
 
 const (
@@ -35,7 +63,13 @@ const (
 	minWidth     = 40
 	channelWidth = 20
 	agoWidth     = 7
+
+	// What the rows have to share the screen with: the headline, the blank
+	// line under it, and the footer.
+	chrome = 4
 )
+
+const keyHints = "  ↑↓ move · enter play · r refresh · q quit"
 
 // Render returns the dashboard as text, newline-terminated, ready to print.
 func Render(d Dashboard) string {
@@ -48,7 +82,9 @@ func Render(d Dashboard) string {
 
 	var newCount int
 	for _, r := range d.Rows {
-		if r.New {
+		// The same precedence the marker uses. A headline that counts a row
+		// the list does not mark is a headline nobody can reconcile.
+		if r.New && !r.Watched {
 			newCount++
 		}
 	}
@@ -63,31 +99,30 @@ func Render(d Dashboard) string {
 	}
 
 	chanWidth, titleWidth := columns(width)
+	first, last := window(d.Selected, len(d.Rows), d.Height)
 
-	for _, r := range d.Rows {
-		marker := "   "
-		if r.New {
-			marker = " • "
+	for i := first; i < last; i++ {
+		r := d.Rows[i]
+
+		cursor := " "
+		if d.Interactive && i == d.Selected {
+			cursor = ">"
 		}
 		if chanWidth == 0 {
-			fmt.Fprintf(&b, " %s %-*s %s\n",
-				marker, agoWidth, Ago(d.Now, r.Video.Published), pad(r.Video.Title, titleWidth))
+			fmt.Fprintf(&b, "%s%s %-*s %s\n",
+				cursor, marker(r), agoWidth, Ago(d.Now, r.Video.Published),
+				pad(r.Video.Title, titleWidth))
 			continue
 		}
-		fmt.Fprintf(&b, " %s %-*s %-*s %s\n",
-			marker,
+		fmt.Fprintf(&b, "%s%s %-*s %-*s %s\n",
+			cursor, marker(r),
 			agoWidth, Ago(d.Now, r.Video.Published),
 			chanWidth, pad(r.Channel, chanWidth),
 			pad(r.Video.Title, titleWidth),
 		)
 	}
 
-	if len(d.Failed) > 0 {
-		b.WriteString("\n")
-		fmt.Fprintf(&b, "  %s\n", pad(fmt.Sprintf("%s could not be reached: %s",
-			plural(len(d.Failed), "channel", "channels"),
-			strings.Join(d.Failed, ", ")), width-2))
-	}
+	b.WriteString(footer(d, width, first, last))
 	return b.String()
 }
 
@@ -113,6 +148,71 @@ func columns(width int) (channel, title int) {
 		return 0, width - fixed
 	}
 	return channel, title
+}
+
+// marker is the three cells before the age. Watched outranks new, and there is
+// no colour in it: the one thing a dashboard must survive is being read on a
+// terminal that has none.
+func marker(r follow.Row) string {
+	switch {
+	case r.Watched:
+		return " ✓ "
+	case r.New:
+		return " • "
+	default:
+		return "   "
+	}
+}
+
+// window is the slice of rows that fits, kept around the cursor. The list
+// moves under the cursor rather than jumping by a page: a row that was next to
+// the cursor before a keypress should be next to it after one.
+func window(selected, rows, height int) (first, last int) {
+	visible := height - chrome
+	if height <= 0 || visible >= rows {
+		return 0, rows
+	}
+	if visible < 1 {
+		visible = 1
+	}
+
+	first = selected - visible/2
+	if first < 0 {
+		first = 0
+	}
+	if first+visible > rows {
+		first = rows - visible
+	}
+	return first, first + visible
+}
+
+func footer(d Dashboard, width, first, last int) string {
+	var lines []string
+	if first > 0 || last < len(d.Rows) {
+		lines = append(lines, fmt.Sprintf("  showing %d-%d of %d", first+1, last, len(d.Rows)))
+	}
+	if len(d.Failed) > 0 {
+		lines = append(lines, "  "+fmt.Sprintf("%s could not be reached: %s",
+			plural(len(d.Failed), "channel", "channels"),
+			strings.Join(d.Failed, ", ")))
+	}
+	if d.Status != "" {
+		lines = append(lines, "  "+d.Status)
+	}
+	if d.Interactive {
+		lines = append(lines, keyHints)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n")
+	for _, line := range lines {
+		b.WriteString(pad(line, width))
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 func headline(rows, fresh int) string {

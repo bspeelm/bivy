@@ -30,6 +30,10 @@ var Version = "dev"
 // stateFile is the whole of what bivy remembers.
 const stateFile = "follows.json"
 
+// dashboardRows is how far back the dashboard goes. Two screens' worth: enough
+// to scroll through what is new, short of being an archive to browse.
+const dashboardRows = 30
+
 // fetcher is what the application needs from the network, named here rather
 // than in the package that implements it, so the tests below run without a
 // server. That is not only convenience: net/http may be imported by one
@@ -47,6 +51,11 @@ type app struct {
 	out    io.Writer
 	errOut io.Writer
 	width  int
+
+	// newPlayer starts mpv. A field for the same reason fetcher is an
+	// interface: the loop that drives a player is worth testing, and mpv is
+	// not something a test may require to be installed.
+	newPlayer func(context.Context) (player, error)
 }
 
 func main() {
@@ -60,11 +69,12 @@ func main() {
 	}
 
 	a := &app{
-		store:  s,
-		feeds:  feed.New(),
-		now:    time.Now,
-		out:    os.Stdout,
-		errOut: os.Stderr,
+		store:     s,
+		feeds:     feed.New(),
+		now:       time.Now,
+		out:       os.Stdout,
+		errOut:    os.Stderr,
+		newPlayer: startMPV,
 	}
 	os.Exit(a.run(ctx, os.Args[1:]))
 }
@@ -72,6 +82,7 @@ func main() {
 const usage = `bivy — a terminal browser and player for online video
 
     bivy                    what the channels you follow have posted
+    bivy list-only          the same, printed once, without the cursor
     bivy follow <channel>   follow a channel: @handle, a channel URL, or an id
     bivy unfollow <channel> stop following one
     bivy list               the channels you follow
@@ -91,13 +102,15 @@ func (a *app) run(ctx context.Context, args []string) int {
 
 	switch command {
 	case "":
-		return a.dashboard(ctx)
+		return a.browse(ctx)
 	case "follow":
 		return a.follow(ctx, argument)
 	case "unfollow":
 		return a.unfollow(argument)
 	case "list":
 		return a.list()
+	case "list-only":
+		return a.dashboard(ctx)
 	case "version":
 		fmt.Fprintln(a.out, "bivy", Version)
 		return 0
@@ -131,7 +144,7 @@ func (a *app) dashboard(ctx context.Context) int {
 
 	fetched, failed := a.fetchAll(ctx, state)
 
-	rows := follow.Dashboard(state, fetched, 30)
+	rows := follow.Dashboard(state, fetched, dashboardRows)
 	fmt.Fprint(a.out, tui.Render(tui.Dashboard{
 		Rows:   rows,
 		Failed: failed,
