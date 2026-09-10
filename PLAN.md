@@ -171,6 +171,7 @@ quietly is how this stops being testable, so each names what disagrees with it.
 | package | job |
 |---|---|
 | `cmd/bivy` | entry point, flag parsing |
+| `internal/media` | the domain types, so that nothing which renders a video imports what fetches one |
 | `internal/config` | TOML configuration |
 | `internal/feed` | fetch and parse per-channel XML feeds. **Sole `net/http` importer.** |
 | `internal/ytdlp` | subprocess only: resolve a search query, resolve a stream URL |
@@ -270,18 +271,22 @@ failure, not a surprise.
 
 ## §9 The network contract
 
-bivy makes exactly two kinds of outbound request:
+bivy makes exactly three kinds of outbound request:
 
-1. **Feed fetches**, from `internal/feed`, over plain HTTPS to a static
-   per-channel XML endpoint. No auth header, no cookie, no query parameter that
-   identifies anyone.
-2. **Extractor calls**, from `internal/ytdlp`, which are subprocess executions
+1. **Feed fetches**, from `internal/feed`, over HTTPS to a static per-channel
+   XML endpoint. No auth header, no cookie, no query parameter that identifies
+   anyone. This is the only kind that runs at launch.
+2. **One channel-page fetch**, from `internal/feed`, when a handle is followed
+   — the only time bivy reads a page meant for a browser, and never at launch.
+   ADR-008.
+3. **Extractor calls**, from `internal/ytdlp`, which are subprocess executions
    rather than requests bivy makes itself — one to resolve a search query, one
-   to resolve a stream URL.
+   to resolve a stream URL. Not built yet.
 
 Nothing else. No analytics, no update check, no crash reporting, no ping. The
 budget in §0 is what makes this checkable rather than merely stated: one
-package imports `net/http`, and a reviewer can read it in an afternoon.
+package imports `net/http`, and a reviewer can read it in an afternoon. The
+count above is the thing to watch — a fourth kind is a decision, not a detail.
 
 ---
 
@@ -291,7 +296,8 @@ package imports `net/http`, and a reviewer can read it in an afternoon.
 - **Fuzzing on the feed parser**, because it is the one place remote bytes are
   parsed.
 - **A table test on argument construction** for both external processes,
-  covering option-shaped input.
+  covering option-shaped input. Until one exists, the same table covers the
+  argument parsing that decides what may become one.
 - **The isolation test** in §8, against a scratch home directory.
 - **The prose compiler**, `docs_test.go`, which holds the README and this
   document against the files that define what they claim.
@@ -320,8 +326,8 @@ executed.
 
 | # | milestone | done when |
 |---|---|---|
-| 0 | **The skeleton.** Founding documents, budgets armed, prose compiler. | the conformance check prints `conformant.` |
-| 1 | **Follow and dashboard.** Add a channel, fetch feeds, show what is new since the last visit. No player yet. | a followed channel's new videos are listed on launch |
+| 0 | **The skeleton.** Founding documents, budgets armed, prose compiler. | ✅ the conformance check prints `conformant.` |
+| 1 | **Follow and dashboard.** Add a channel, fetch feeds, show what is new since the last visit. No player yet. | ✅ a followed channel's new videos are listed on launch |
 | 2 | **Play.** mpv over IPC. | enter on a dashboard row plays it in an mpv window and marks it watched |
 | 3 | **Search.** Extractor-backed query into the same list model. | a query returns rows that play the same way |
 | 4 | **Thumbnails.** Capability probe, kitty-protocol grid, text-only fallback where the protocol is absent. | the grid renders where supported and degrades where not |
@@ -336,9 +342,10 @@ directory afterwards contains exactly the two directories from §8.
 
 Named here so they are decided deliberately rather than discovered.
 
-- **Which terminal-interface library.** A direct dependency with a budget
-  attached, and the choice affects how thumbnails are emitted. Deferred to
-  milestone 1, decided by ADR before the first import.
+- **Which terminal-interface library.** Milestone 1 turned out not to need
+  one: a dashboard that prints and exits needs a renderer, not a terminal
+  library. The decision moves to milestone 2, which has something to press a
+  key on, and is made by ADR before the first import.
 - **The §0 numbers themselves.** They were drafted before there was code to
   measure. They are armed now, which is the point; tightening them once the
   shape of the code is known is expected and is a commit to §0.

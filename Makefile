@@ -8,12 +8,15 @@
 # go does not look for it.
 export GOFLAGS := -mod=readonly
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -s -w -X main.Version=$(VERSION)
+
 # The development standard this project is held to lives outside it, so that
 # two projects cannot drift into two standards. Overridable, because where a
 # checkout sits is a property of a machine and not of this project.
 STANDARD_CHECK ?= ../agent-context/check.sh
 
-.PHONY: help lint vet test race budgets standard check
+.PHONY: help lint vet test race budgets standard check build install
 
 help:
 	@echo "make check       lint, vet, race tests, budgets, standard - the gate"
@@ -21,6 +24,8 @@ help:
 	@echo "make race        go test -race"
 	@echo "make budgets     the PLAN.md §0 budgets"
 	@echo "make standard    conformance against the development standard, if present"
+	@echo "make build       build bivy for this machine"
+	@echo "make install     build it and put it on PATH"
 
 lint:
 	gofmt -l . | (! grep .) || { echo "gofmt -w the files above"; exit 1; }
@@ -49,3 +54,12 @@ standard:
 # `standard` is in here rather than beside it: a conformance check nothing
 # blocks on is the failure it exists to catch.
 check: lint vet race budgets standard
+
+# The same flags the budget uses to measure the binary, so what is measured is
+# what runs.
+build:
+	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bivy ./cmd/bivy
+
+install: build
+	install -Dm755 bivy $(HOME)/.local/bin/bivy
+	@echo "installed to ~/.local/bin/bivy"

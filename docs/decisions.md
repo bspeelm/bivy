@@ -217,3 +217,38 @@ price.
 **What would reopen this:** a measured launch that is slow enough to matter,
 and even then the answer is a session-lifetime memory budget before it is a
 directory.
+
+---
+
+## ADR-008 — Following a handle fetches one page; nothing else bivy does reads HTML
+
+**Status:** accepted, milestone 1.
+
+A feed is keyed by channel identifier, and nobody has one. What people have is
+`@handle`, or a URL they copied from a browser. Working out which channel a
+handle names means fetching that channel's page and reading the identifier out
+of it, and that is a second kind of request — for a page meant for a browser
+rather than for a static feed.
+
+The alternative was refusing: accept identifiers and `/channel/UC…` URLs only,
+and tell the user to go and find one. It was rejected because the errand it
+sets is "open a browser, load the channel, view source or install an
+extension", and a program whose first instruction is to go and use the thing it
+replaces has not been built yet. The privacy story is also not improved by it:
+the user makes the same request, from the same machine, with a browser that
+sends far more than bivy does.
+
+What keeps it bounded, and what a reviewer should check has not slipped:
+
+- It happens **when a channel is followed**, and never at launch. The dashboard
+  path makes feed requests only (ADR-003).
+- It is a plain GET with the same fixed user agent, no cookie and no header
+  that identifies anyone — the same rules every other request obeys.
+- The response is read through the same capped reader, and nothing from it is
+  kept except a string that has been checked to be shaped like an identifier.
+- Failing is normal. A consent wall or a redesign means the user is told to
+  pass a `/channel/UC…` URL instead, which is the refused design still
+  available as a fallback.
+
+This is why §9 names three kinds of outbound request rather than two, and the
+count is the thing to keep an eye on: a fourth is a decision, not a detail.

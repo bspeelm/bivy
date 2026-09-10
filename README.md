@@ -13,21 +13,39 @@ check rather than one you have to take.
 
 ## Status
 
-**Nothing is built yet.** This repository currently holds the founding
-documents, the budgets, and the checks that hold them together. `PLAN.md` §12
-lists the milestones; milestone 0 is the skeleton you are looking at.
+Following and the dashboard work. There is no player yet — pressing enter on a
+row is milestone 2. `PLAN.md` §12 lists the rest.
 
-## What it will do
+## Using it
+
+```
+bivy                    what the channels you follow have posted
+bivy follow <channel>   follow one: @handle, a channel URL, or an id
+bivy unfollow <channel> stop following one, by id or by name
+bivy list               the channels you follow
+```
+
+`bivy` on its own is the dashboard. Newest first, one line each, and a dot
+against anything posted since you last looked:
+
+```
+bivy · 2 new videos since your last visit
+
+  •  2h ago  Aye                  The newest thing that happened
+  •  1d ago  Bee                  Something from yesterday
+     5d ago  Aye                  Older, and already seen
+```
+
+A channel that cannot be reached is named under the list rather than quietly
+left out, and its entries stay new until they have actually been shown.
+
+## Still to come
 
 | | |
 |---|---|
-| **Follow** | `bivy follow <channel>` adds a channel to a local list. Nothing leaves the machine but the request for that channel's public feed. |
-| **Dashboard** | launching bivy shows what the channels you follow have posted since you last looked. |
-| **Search** | a query, resolved through `yt-dlp`, returning rows that behave like any other row. |
 | **Watch** | enter plays the video in mpv's own window, and marks it watched. |
-
-Thumbnails render in the terminal where the graphics protocol is available,
-and bivy says so plainly where it is not.
+| **Search** | a query, resolved through `yt-dlp`, returning rows that behave like any other row. |
+| **Thumbnails** | rendered in the terminal where the graphics protocol is available, with bivy saying so plainly where it is not. |
 
 ## What it will not do
 
@@ -39,9 +57,9 @@ disagree with the argument rather than guess at the motive.
 
 ## Requirements
 
-- **mpv**, for playback. bivy decodes nothing itself.
-- **yt-dlp**, to resolve a search query and a stream URL. The dashboard does
-  not need it.
+- **mpv**, for playback. bivy decodes nothing itself. Not needed yet.
+- **yt-dlp**, to resolve a search query and a stream URL. Not needed yet, and
+  the dashboard will never need it.
 - A terminal that speaks the kitty graphics protocol, for thumbnails. Optional;
   without one, bivy renders text.
 
@@ -55,6 +73,8 @@ up. Remove those two directories and bivy was never here.
 ## Building and checking
 
 ```
+make build     build bivy for this machine
+make install   build it and put it on ~/.local/bin
 make check     lint, vet, race tests, budgets, and the standard conformance check
 make test      go test
 make budgets   the PLAN.md §0 budgets, asserted
