@@ -40,8 +40,11 @@ bivy · 2 new videos since your last visit
 
 ────────────────────────────────────────────────────────────────────
 nothing playing
-↑↓ move · enter play · / search · : commands · r refresh · :q quit
+↑↓ move · enter play · f follow · / search · : commands · r refresh · :q quit
 ```
+
+Enter on a channel row opens it and lists its videos; `esc` goes back one
+screen. `m` loads thirty more of whatever you are looking at.
 
 A dot marks anything posted since you last looked and a tick anything you have
 watched. What is being chosen sits on the left; what is known about it is
@@ -99,9 +102,9 @@ else is a key. That rule is ADR-011 and it is what keeps the list short.
 ## Thumbnails
 
 Where your terminal speaks the kitty graphics protocol, the row under the
-cursor gets its thumbnail in a pane to the left of the titles. The pane is a
-quarter of the window, so it grows with the terminal and disappears on one too
-small to spare the room. bivy asks the terminal whether it can
+cursor gets its thumbnail in a pane to the left of the titles, halfway down it.
+The pane is a third of the window, so it grows with the terminal and disappears
+on one too small to spare the room. bivy asks the terminal whether it can
 draw rather than guessing from `$TERM`, so moving between terminals is not
 something you have to configure — and where the answer is no, nothing changes
 and no stray bytes are printed.

@@ -22,10 +22,13 @@ import (
 // fakeScreen is a terminal that draws into a buffer and takes its keypresses
 // from a script. internal/term proves the decoding; this proves the loop.
 type fakeScreen struct {
-	draws   graphics.Capability
-	keys    chan term.Press
-	resizes chan struct{}
-	w, h    int
+	draws    graphics.Capability
+	keys     chan term.Press
+	resizes  chan struct{}
+	w, h     int
+	art      string
+	artRow   int
+	artSends int
 
 	mu     sync.Mutex
 	frames []string
@@ -42,6 +45,7 @@ func newScreen() *fakeScreen {
 }
 
 func (s *fakeScreen) Graphics() graphics.Capability { return s.draws }
+func (s *fakeScreen) Cell() graphics.Cell           { return graphics.Assumed }
 func (s *fakeScreen) Keys() <-chan term.Press       { return s.keys }
 func (s *fakeScreen) Resized() <-chan struct{}      { return s.resizes }
 
@@ -65,6 +69,30 @@ func (s *fakeScreen) resize(w, h int) {
 	case s.resizes <- struct{}{}:
 	default:
 	}
+}
+
+// DrawArt records the picture the way the terminal keeps it: set once and
+// left alone until it changes.
+func (s *fakeScreen) DrawArt(row int, art string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if art != s.art || row != s.artRow {
+		s.artSends++
+	}
+	s.art, s.artRow = art, row
+	return nil
+}
+
+func (s *fakeScreen) picture() (int, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.artRow, s.art
+}
+
+func (s *fakeScreen) pictureSends() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.artSends
 }
 
 func (s *fakeScreen) Draw(frame string) error {
@@ -156,7 +184,7 @@ func (a *fakeArt) Fetch(_ context.Context, videoID string) ([]byte, error) {
 	return []byte("picture of " + videoID), nil
 }
 
-func (a *fakeArt) Draw(data []byte, cols, rows int) (string, error) {
+func (a *fakeArt) Draw(data []byte, cols, rows int, cell graphics.Cell) (string, error) {
 	return fmt.Sprintf("<art %dx%d %s>", cols, rows, data), nil
 }
 
@@ -195,15 +223,27 @@ type stubSearch struct {
 	channels []media.Channel
 	uploads  map[string]media.Channel
 	err      error
-	asked    []string
+	// before runs at the start of a search, so a test can hold one open.
+	before func()
+	asked  []string
 }
 
-func (s *stubSearch) Search(_ context.Context, query string, _ int) ([]media.Video, error) {
+func (s *stubSearch) Search(_ context.Context, query string, limit int) ([]media.Video, error) {
+	s.mu.Lock()
+	hold := s.before
+	s.mu.Unlock()
+	if hold != nil {
+		hold()
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.asked = append(s.asked, query)
 	if s.err != nil {
 		return nil, s.err
+	}
+	if limit < len(s.results) {
+		return s.results[:limit], nil
 	}
 	return s.results, nil
 }
@@ -298,6 +338,23 @@ func (b *browserHarness) quit(t *testing.T) {
 	case <-b.done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the browser did not stop when quit was pressed")
+	}
+}
+
+// eventuallyArt waits for the picture on screen to be something.
+func (b *browserHarness) eventuallyArt(t *testing.T, want string) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		if _, art := b.screen.picture(); strings.Contains(art, want) {
+			return
+		}
+		select {
+		case <-deadline:
+			_, art := b.screen.picture()
+			t.Fatalf("the picture never became %q; it is %q", want, art)
+		case <-time.After(5 * time.Millisecond):
+		}
 	}
 }
 
@@ -1267,14 +1324,14 @@ func TestOnlyTheRowUnderTheCursorGetsAPicture(t *testing.T) {
 	b.run(t, "follow", chanA)
 
 	b.start(t)
-	b.eventually(t, "picture of aaaaaaaaaaa")
+	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
 
 	if got := b.art.asked(); len(got) != 1 || got[0] != "aaaaaaaaaaa" {
 		t.Errorf("fetched %v, want only the row under the cursor", got)
 	}
 
 	b.screen.press(named(term.KeyDown))
-	b.eventually(t, "picture of ccccccccccc")
+	b.eventuallyArt(t, "picture of ccccccccccc")
 	b.quit(t)
 
 	if got := len(b.art.asked()); got != 2 {
@@ -1291,11 +1348,11 @@ func TestAPictureIsFetchedOnce(t *testing.T) {
 	b.run(t, "follow", chanA)
 
 	b.start(t)
-	b.eventually(t, "picture of aaaaaaaaaaa")
+	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
 	b.screen.press(named(term.KeyDown))
-	b.eventually(t, "picture of ccccccccccc")
+	b.eventuallyArt(t, "picture of ccccccccccc")
 	b.screen.press(named(term.KeyUp))
-	b.eventually(t, "picture of aaaaaaaaaaa")
+	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
 	b.quit(t)
 
 	if got := len(b.art.asked()); got != 2 {
@@ -1369,15 +1426,15 @@ func TestThePictureIsRedrawnWhenTheWindowChanges(t *testing.T) {
 	b.run(t, "follow", chanA)
 
 	b.start(t)
-	cols, _ := tui.ArtBox(b.screen.width(), 24)
-	b.eventually(t, fmt.Sprintf("<art %dx", cols))
+	cols, _ := tui.ArtBox(b.screen.width(), 24, graphics.Assumed)
+	b.eventuallyArt(t, fmt.Sprintf("<art %dx", cols))
 
 	b.screen.resize(140, 40)
-	wider, _ := tui.ArtBox(140, 40)
+	wider, _ := tui.ArtBox(140, 40, graphics.Assumed)
 	if wider == cols {
 		t.Skip("the two window sizes ask for the same picture")
 	}
-	b.eventually(t, fmt.Sprintf("<art %dx", wider))
+	b.eventuallyArt(t, fmt.Sprintf("<art %dx", wider))
 	b.quit(t)
 
 	// Re-drawn, not re-fetched: the bytes did not change, only their size.
@@ -1619,5 +1676,147 @@ func TestOpenAFollowedChannelNotOnScreen(t *testing.T) {
 
 	if br.viewing != "Aye" {
 		t.Errorf("viewing %q, want Aye", br.viewing)
+	}
+}
+
+// Thirty at a time, and the rows that arrive go below where the reader
+// already is.
+func TestLoadingMore(t *testing.T) {
+	b := newBrowser(t)
+
+	var many []media.Video
+	for i := range 60 {
+		many = append(many, media.Video{ID: fmt.Sprintf("vid%08d", i), Title: fmt.Sprintf("Result %d", i), Author: "Someone"})
+	}
+	b.finder.results = many[:30]
+
+	br := b.start(t)
+	b.eventually(t, "nothing followed yet")
+	b.screen.press(key('/'))
+	b.screen.typed("lots")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "30 results")
+
+	b.finder.results = many
+	b.screen.press(key('m'))
+	b.eventually(t, "30 more")
+	b.eventually(t, "60 results")
+	b.quit(t)
+
+	if got := len(br.rows); got != 60 {
+		t.Errorf("%d rows after loading more, want 60", got)
+	}
+	if br.selected != 0 {
+		t.Errorf("the cursor moved to %d when more arrived", br.selected)
+	}
+}
+
+// A page that repeats what is already there adds nothing twice.
+func TestLoadingMoreDoesNotDuplicate(t *testing.T) {
+	b := newBrowser(t)
+
+	var many []media.Video
+	for i := range 30 {
+		many = append(many, media.Video{ID: fmt.Sprintf("vid%08d", i), Title: fmt.Sprintf("Result %d", i), Author: "Someone"})
+	}
+	b.finder.results = many
+
+	br := b.start(t)
+	b.eventually(t, "nothing followed yet")
+	b.screen.press(key('/'))
+	b.screen.typed("lots")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "30 results")
+
+	// The same page again: nothing new in it.
+	b.screen.press(key('m'))
+	b.eventually(t, "that is all of it")
+	b.quit(t)
+
+	if got := len(br.rows); got != 30 {
+		t.Errorf("%d rows after a page with nothing new, want 30", got)
+	}
+	if br.more != nil {
+		t.Error("a screen with nothing more to give still offers more")
+	}
+}
+
+// The dashboard shows what the feeds carried, so there is no next page of it.
+func TestTheDashboardHasNoNextPage(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(key('m'))
+	b.eventually(t, "nothing more to load here")
+	b.quit(t)
+}
+
+// "0 results" and "not finished looking" are different answers, and the second
+// reads as the first.
+func TestASearchInFlightSaysSo(t *testing.T) {
+	b := newBrowser(t)
+
+	// A search that does not return until told to.
+	release := make(chan struct{})
+	b.finder.before = func() { <-release }
+
+	b.start(t)
+	b.eventually(t, "nothing followed yet")
+	b.screen.press(key('/'))
+	b.screen.typed("slow")
+	b.screen.press(named(term.KeyEnter))
+
+	b.eventually(t, `searching for "slow"…`)
+	if strings.Contains(b.screen.last(), "0 results") {
+		t.Errorf("a search in flight reported no results:\n%s", b.screen.last())
+	}
+
+	close(release)
+	b.eventually(t, "A Search Result")
+	b.quit(t)
+}
+
+// An unchanged picture is not sent again. Re-sending one costs tens of
+// kilobytes of escape sequence on every keypress, which a multiplexer between
+// bivy and the terminal has to parse and keep in step with.
+func TestAnUnchangedPictureIsNotSentAgain(t *testing.T) {
+	b := newBrowser(t)
+	b.screen.draws = graphics.Kitty
+	b.app.art = b.art
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
+	sends := b.screen.pictureSends()
+
+	// Keys that redraw the frame without changing which row is selected.
+	for range 6 {
+		b.screen.press(named(term.KeyUp))
+	}
+	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
+	b.quit(t)
+
+	if got := b.screen.pictureSends(); got != sends {
+		t.Errorf("the picture was sent %d more times while it had not changed", got-sends)
+	}
+}
+
+// And a picture that does change is sent.
+func TestAChangedPictureIsSent(t *testing.T) {
+	b := newBrowser(t)
+	b.screen.draws = graphics.Kitty
+	b.app.art = b.art
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
+	b.screen.press(named(term.KeyDown))
+	b.eventuallyArt(t, "picture of ccccccccccc")
+	b.quit(t)
+
+	if got := b.screen.pictureSends(); got < 2 {
+		t.Errorf("the picture was sent %d times across two rows", got)
 	}
 }

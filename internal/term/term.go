@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"unicode/utf8"
 
@@ -59,8 +60,14 @@ const (
 	hideCursor     = "\x1b[?25l"
 	showCursor     = "\x1b[?25h"
 	cursorHome     = "\x1b[H"
-	clearLine      = "\x1b[K"
-	clearBelow     = "\x1b[J"
+	// Writing into the last column of a line with auto-wrap on moves the
+	// cursor to the next row, and the character that did it lands somewhere
+	// nobody meant. Every frame here fills its width exactly, so the last
+	// column is written on every row.
+	noAutoWrap = "\x1b[?7l"
+	autoWrap   = "\x1b[?7h"
+	clearLine  = "\x1b[K"
+	clearBelow = "\x1b[J"
 )
 
 // Terminal is a terminal in raw mode, on the alternate screen.
@@ -69,9 +76,13 @@ type Terminal struct {
 	out      *os.File
 	state    *term.State
 	graphics graphics.Capability
-	keys     chan Press
-	resized  chan struct{}
-	closed   chan struct{}
+	cell     graphics.Cell
+	// art is what is on screen, so an unchanged picture is not sent again.
+	art     string
+	artRow  int
+	keys    chan Press
+	resized chan struct{}
+	closed  chan struct{}
 }
 
 // ErrNotATerminal is returned when input or output is not a terminal, which is
@@ -100,7 +111,7 @@ func Open(in, out *os.File) (*Terminal, error) {
 		closed:  make(chan struct{}),
 	}
 
-	if _, err := io.WriteString(out, enterAltScreen+hideCursor); err != nil {
+	if _, err := io.WriteString(out, enterAltScreen+hideCursor+noAutoWrap); err != nil {
 		_ = t.Close()
 		return nil, err
 	}
@@ -108,6 +119,11 @@ func Open(in, out *os.File) (*Terminal, error) {
 	// Before the key reader starts, so the answer is read by the probe rather
 	// than decoded as somebody typing.
 	t.graphics = graphics.Probe(in, out)
+	if t.graphics == graphics.Kitty {
+		// Only where a picture might be drawn, and before the key reader
+		// starts so the answer is not read as somebody typing.
+		t.cell = graphics.CellSize(in, out)
+	}
 
 	go t.readKeys()
 	go t.watchResize()
@@ -116,6 +132,10 @@ func Open(in, out *os.File) (*Terminal, error) {
 
 // Graphics is what the terminal said it could draw, asked once on open.
 func (t *Terminal) Graphics() graphics.Capability { return t.graphics }
+
+// Cell is how big one cell is in pixels, as the terminal reported it. The
+// zero value means it would not say.
+func (t *Terminal) Cell() graphics.Cell { return t.cell }
 
 // Close restores the terminal to exactly how it was found. Safe to call twice,
 // and it must be: this runs from a deferred call on the ordinary path and a
@@ -129,7 +149,10 @@ func (t *Terminal) Close() error {
 		close(t.closed)
 	}
 
-	_, _ = io.WriteString(t.out, showCursor+leaveAltScreen)
+	if t.graphics == graphics.Kitty {
+		_, _ = io.WriteString(t.out, graphics.Clear)
+	}
+	_, _ = io.WriteString(t.out, autoWrap+showCursor+leaveAltScreen)
 	if t.state == nil {
 		return nil
 	}
@@ -148,28 +171,57 @@ func (t *Terminal) Size() (width, height int) {
 // Draw replaces what is on screen with frame, clearing each line as it is
 // written: blanking first shows an empty screen for one refresh.
 func (t *Terminal) Draw(frame string) error {
+	// The frame fills the screen exactly, so a newline after its last line
+	// scrolls everything up one — every frame drifting a row, with what
+	// drifted off the top still on screen underneath.
+	frame = strings.TrimSuffix(frame, "\n")
+
 	var b []byte
-	// Any picture the terminal holds is taken away first: writing text over
-	// one does not remove it.
-	if t.graphics == graphics.Kitty {
-		b = append(b, graphics.Clear...)
-	}
 	b = append(b, cursorHome...)
 
+	// Cleared before each line is written, not after: a row may begin past a
+	// picture's pane, and clearing from where its text ends leaves whatever
+	// was in the pane.
+	b = append(b, clearLine...)
 	for _, c := range []byte(frame) {
 		if c == '\n' {
-			// Carriage return as well: in raw mode a newline moves down
-			// without moving left, and every row would start further across
-			// than the one above it.
-			b = append(b, clearLine...)
 			b = append(b, '\r', '\n')
+			b = append(b, clearLine...)
 			continue
 		}
 		b = append(b, c)
 	}
-	b = append(b, clearLine...)
-	b = append(b, clearBelow...)
+	// No clear-below: every line was cleared as it was written, and a frame is
+	// exactly as tall as the window.
 
+	_, err := t.out.Write(b)
+	return err
+}
+
+// DrawArt puts a picture at a row, and does nothing when it is already there.
+// Re-sending an unchanged one costs tens of kilobytes of escape sequence per
+// keypress, which anything between bivy and the terminal has to keep up with.
+func (t *Terminal) DrawArt(row int, art string) error {
+	if t.graphics != graphics.Kitty {
+		return nil
+	}
+	if art == t.art && row == t.artRow {
+		return nil
+	}
+
+	var b []byte
+	if t.art != "" {
+		b = append(b, graphics.Clear...)
+	}
+	if art != "" {
+		b = append(b, fmt.Sprintf("\x1b[%d;1H", row)...)
+		b = append(b, art...)
+	}
+	t.art, t.artRow = art, row
+
+	if len(b) == 0 {
+		return nil
+	}
 	_, err := t.out.Write(b)
 	return err
 }

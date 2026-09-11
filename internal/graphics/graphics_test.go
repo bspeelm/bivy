@@ -94,7 +94,7 @@ func thumbnail(t *testing.T, w, h int) []byte {
 }
 
 func TestRenderDrawsAnImage(t *testing.T) {
-	out, err := Render(thumbnail(t, 480, 360), 20, 6)
+	out, err := Render(thumbnail(t, 480, 360), 20, 6, Assumed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestRenderDrawsAnImage(t *testing.T) {
 // A reply would arrive on the same file the keys come from and be read as
 // keystrokes, so the terminal is asked not to send one.
 func TestRenderAsksForNoReply(t *testing.T) {
-	out, err := Render(thumbnail(t, 64, 64), 4, 2)
+	out, err := Render(thumbnail(t, 64, 64), 4, 2, Assumed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestRenderAsksForNoReply(t *testing.T) {
 // The protocol carries at most 4096 base64 bytes per sequence, and the chunks
 // have to say whether another follows.
 func TestRenderChunksALargeImage(t *testing.T) {
-	out, err := Render(thumbnail(t, 480, 360), 60, 20)
+	out, err := Render(thumbnail(t, 480, 360), 60, 20, Assumed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestRenderRefusesWhatIsNotAnImage(t *testing.T) {
 		[]byte("\x1b_Ga=T,f=100;pretending to be a graphics sequence\x1b\\"),
 		append([]byte("\xff\xd8\xff"), []byte("a truncated jpeg")...),
 	} {
-		if _, err := Render(data, 10, 4); err == nil {
+		if _, err := Render(data, 10, 4, Assumed); err == nil {
 			t.Errorf("Render(%.20q) drew something", data)
 		}
 	}
@@ -172,7 +172,7 @@ func TestRenderRefusesWhatIsNotAnImage(t *testing.T) {
 
 func TestRenderNeedsRoom(t *testing.T) {
 	for _, size := range [][2]int{{0, 4}, {4, 0}, {-1, 4}, {0, 0}} {
-		if _, err := Render(thumbnail(t, 64, 64), size[0], size[1]); err == nil {
+		if _, err := Render(thumbnail(t, 64, 64), size[0], size[1], Assumed); err == nil {
 			t.Errorf("Render into %dx%d cells drew something", size[0], size[1])
 		}
 	}
@@ -181,11 +181,11 @@ func TestRenderNeedsRoom(t *testing.T) {
 // A thumbnail is sent down a pseudo-terminal, so what goes out has to be the
 // size of the picture on screen rather than the size it arrived.
 func TestRenderShrinksWhatItSends(t *testing.T) {
-	small, err := Render(thumbnail(t, 1280, 720), 20, 6)
+	small, err := Render(thumbnail(t, 1280, 720), 20, 6, Assumed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	full, err := Render(thumbnail(t, 1280, 720), 200, 60)
+	full, err := Render(thumbnail(t, 1280, 720), 200, 60, Assumed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestCapabilitySaysWhatItIs(t *testing.T) {
 // The picture that goes out is a picture, not the bytes that arrived.
 func TestRenderReEncodesRatherThanForwarding(t *testing.T) {
 	original := thumbnail(t, 64, 64)
-	out, err := Render(original, 8, 4)
+	out, err := Render(original, 8, 4, Assumed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,6 +277,91 @@ func TestRenderReEncodesRatherThanForwarding(t *testing.T) {
 		// expected; a wrong magic number is not.
 		if !bytes.HasPrefix(raw, []byte("\x89PNG")) {
 			t.Errorf("what went out is not a PNG: %.8q", raw)
+		}
+	}
+}
+
+// A cell belongs to the font. Guessing it is what makes a picture the wrong
+// shape: the protocol fills the cells it is told about, whatever shape the
+// image was, so a cell assumed twice as tall as it is wide in a font where it
+// is half that comes out stretched sideways.
+func TestCellSizeReadsTheTerminalsAnswer(t *testing.T) {
+	got := CellSize(replier{reply: "\x1b[6;21;9t"}, io.Discard)
+	if got.Width != 9 || got.Height != 21 {
+		t.Errorf("CellSize = %+v, want 9x21", got)
+	}
+	if !got.Known() {
+		t.Error("a terminal's own figures were not treated as known")
+	}
+}
+
+func TestCellSizeGivesUpOnSilence(t *testing.T) {
+	if got := CellSize(replier{quiet: true}, io.Discard); got.Known() {
+		t.Errorf("CellSize = %+v from a terminal that said nothing", got)
+	}
+}
+
+func TestCellSizeRefusesNonsense(t *testing.T) {
+	for _, reply := range []string{
+		"", "\x1b[6;0;0t", "\x1b[6;999;999t", "\x1b[4;100;200t", "not a reply",
+	} {
+		if got := parseCell(reply); got.Known() {
+			t.Errorf("parseCell(%q) = %+v, want nothing", reply, got)
+		}
+	}
+}
+
+// The picture is scaled for the cells it will occupy, so a terminal with wider
+// cells gets more pixels rather than the same ones stretched.
+func TestRenderScalesForTheTerminalsCells(t *testing.T) {
+	narrow, err := Render(thumbnail(t, 1280, 720), 30, 8, Cell{Width: 8, Height: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wide, err := Render(thumbnail(t, 1280, 720), 30, 8, Cell{Width: 16, Height: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wide) <= len(narrow) {
+		t.Errorf("a terminal with cells twice the size got %d bytes against %d", len(wide), len(narrow))
+	}
+}
+
+// An unknown cell size falls back rather than dividing by zero.
+func TestRenderWithoutACellSize(t *testing.T) {
+	if _, err := Render(thumbnail(t, 64, 64), 8, 4, Cell{}); err != nil {
+		t.Errorf("Render with no cell size: %v", err)
+	}
+}
+
+// The protocol stretches what it is given across the cells it is told about,
+// so an image whose shape does not match the box comes out distorted. A
+// four-by-three thumbnail in a widescreen box is the case that happens.
+func TestRenderFillsTheBoxExactly(t *testing.T) {
+	for _, source := range [][2]int{{1280, 720}, {480, 360}, {1000, 1000}, {200, 900}} {
+		out, err := Render(thumbnail(t, source[0], source[1]), 30, 8, Cell{Width: 9, Height: 21})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var payload strings.Builder
+		for _, piece := range strings.Split(out, "\x1b_G")[1:] {
+			body := piece[strings.Index(piece, ";")+1:]
+			payload.WriteString(strings.TrimSuffix(body, "\x1b\\"))
+		}
+		raw, err := base64.StdEncoding.DecodeString(payload.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		img, err := png.Decode(bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		want := image.Rect(0, 0, 30*9, 8*21)
+		if got := img.Bounds(); got != want {
+			t.Errorf("a %dx%d source became %v, want exactly %v — the terminal will stretch it",
+				source[0], source[1], got, want)
 		}
 	}
 }

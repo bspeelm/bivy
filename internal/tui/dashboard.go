@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bspeelm/bivy/internal/follow"
+	"github.com/bspeelm/bivy/internal/graphics"
 	"github.com/bspeelm/bivy/internal/media"
 )
 
@@ -65,6 +66,10 @@ type Dashboard struct {
 	Query    string
 	Channels bool
 	Viewing  string
+	// Busy means the thing on screen is still arriving. Said in the heading,
+	// because "0 results" and "not finished looking" are different answers
+	// and the second one reads as the first.
+	Busy bool
 	// Line is what has been typed into the command line, and Typing means it
 	// has the keyboard.
 	Line   string
@@ -73,6 +78,8 @@ type Dashboard struct {
 	// what the terminal draws — sized by ArtBox of this frame's own width and
 	// height, so it fits the window it is in.
 	Art string
+	// Cell decides how many rows a picture of a given width occupies.
+	Cell graphics.Cell
 	// Interactive draws the cursor, the frame and the key hints. Without it
 	// the same model renders as a plain listing, which is what a pipe gets.
 	Interactive bool
@@ -99,9 +106,9 @@ const (
 
 const (
 	keyHints     = "↑↓ move · enter play · / search · : commands · r refresh · :q quit"
-	resultHints  = "↑↓ move · enter play · f follow · / search again · esc back · :q quit"
-	channelHints = "↑↓ move · enter open · f follow · / search · esc back · :q quit"
-	viewingHints = "↑↓ move · enter play · f follow · esc back · :q quit"
+	resultHints  = "↑↓ move · enter play · f follow · m more · esc back · :q quit"
+	channelHints = "↑↓ move · enter open · f follow · m more · esc back · :q quit"
+	viewingHints = "↑↓ move · enter play · f follow · m more · esc back · :q quit"
 	emptyHints   = "/ search · : commands · r refresh · :q quit"
 	noResults    = "/ search again · esc back · :q quit"
 )
@@ -182,18 +189,53 @@ func chrome(d Dashboard, width int) int {
 	return n
 }
 
+// ArtRow is the screen row the picture starts on, counting from one, and zero
+// where there is none. Halfway down its pane rather than at the top: a small
+// picture in a corner reads as one that failed to fill the space.
+func (d Dashboard) ArtRow() int {
+	_, artRows := d.artPane()
+	if artRows == 0 || len(d.Rows) == 0 {
+		return 0
+	}
+
+	visible := d.visibleRows()
+	first, last := window(d.Selected, len(d.Rows), visible)
+	// Past the title and the rule, counting from one.
+	const top = 3
+	return top + max(0, (min(visible, last-first)-artRows)/2)
+}
+
+// visibleRows is how many list rows this frame has room for.
+func (d Dashboard) visibleRows() int {
+	width, height := d.Width, d.Height
+	if width < minWidth {
+		width = defaultWidth
+	}
+	if height <= 0 {
+		height = defaultHeight
+	}
+	return max(1, height-chrome(d, width))
+}
+
 // ArtBox is the picture's size in cells for a window of this size, and zero
 // where there is no room worth the space. A quarter of the width, bounded: one
 // that grows without limit takes the screen from what it illustrates, and one
 // that never grows is a stamp on a large display.
-func ArtBox(width, height int) (cols, rows int) {
+func ArtBox(width, height int, cell graphics.Cell) (cols, rows int) {
 	if width < minWidth+minList || height < minHeight {
 		return 0, 0
 	}
+	if !cell.Known() {
+		cell = graphics.Assumed
+	}
 
-	cols = width / 4
+	cols = width / 3
 	cols = min(max(cols, minArtCols), maxArtCols)
-	rows = cols * 9 / 16 / 2
+
+	// How many rows a sixteen-by-nine picture that wide occupies in this
+	// terminal's cells rather than assumed ones. Getting it wrong is what
+	// stretches a picture.
+	rows = cols * cell.Width * 9 / (16 * cell.Height)
 
 	if rows < 3 || height-chromeLines-rows < 2 {
 		return 0, 0
@@ -203,7 +245,7 @@ func ArtBox(width, height int) (cols, rows int) {
 
 const (
 	minArtCols = 16
-	maxArtCols = 34
+	maxArtCols = 48
 	// minList is how much has to be left for the titles beside the picture.
 	minList = 30
 	// minHeight is the shortest window a picture is worth drawing in.
@@ -215,7 +257,7 @@ func (d Dashboard) artPane() (cols, rows int) {
 	if d.Art == "" || !d.Interactive {
 		return 0, 0
 	}
-	return ArtBox(d.Width, d.Height)
+	return ArtBox(d.Width, d.Height, d.Cell)
 }
 
 // heading is what this screen is, after the program's name.
@@ -230,6 +272,12 @@ func heading(d Dashboard) string {
 	}
 
 	switch {
+	case d.Busy && d.Query != "":
+		return fmt.Sprintf("searching for %q…", d.Query)
+	case d.Busy && d.Viewing != "":
+		return "opening " + d.Viewing + "…"
+	case d.Busy:
+		return "fetching…"
 	case d.Viewing != "":
 		return fmt.Sprintf("%s · %s", d.Viewing, plural(len(d.Rows), "video", "videos"))
 	case d.Query != "" && d.Channels:
@@ -249,7 +297,7 @@ func heading(d Dashboard) string {
 // indented past the picture's pane, including those below it, so the titles
 // form one column rather than stepping left half way down.
 func list(d Dashboard, width, visible int) string {
-	artCols, artRows := d.artPane()
+	artCols, _ := d.artPane()
 	indent := 0
 	if artCols > 0 {
 		indent = artCols + 2
@@ -263,12 +311,6 @@ func list(d Dashboard, width, visible int) string {
 
 	var b strings.Builder
 	for i := first; i < last; i++ {
-		var line string
-		if artCols > 0 && i-first == 0 {
-			// Placed where the cursor already is, without moving it.
-			line = d.Art
-		}
-
 		cursor := " "
 		if d.Interactive && i == d.Selected {
 			cursor = ">"
@@ -283,13 +325,12 @@ func list(d Dashboard, width, visible int) string {
 			text = forward(indent) + text
 		}
 
-		b.WriteString(line + text)
+		b.WriteString(text)
 		b.WriteString("\n")
 	}
 
-	drawn := last - first
-	// The pane may outlast the list, and the rules sit below both.
-	for range max(0, max(visible-drawn, artRows-drawn)) {
+	// Padded so the frame is exactly as tall as the window.
+	for range max(0, visible-(last-first)) {
 		b.WriteString("\n")
 	}
 	return b.String()

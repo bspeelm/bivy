@@ -136,15 +136,19 @@ var handleShape = regexp.MustCompile(`^@[A-Za-z0-9._-]{1,60}$`)
 // The address is derived from the identifier, never taken from a feed, so a
 // hostile feed cannot aim this request.
 func (c *Client) Thumbnail(ctx context.Context, videoID string) ([]byte, error) {
-	target := media.ThumbnailURL(videoID)
-	if target == "" {
+	targets := media.ThumbnailURLs(videoID)
+	if len(targets) == 0 {
 		return nil, fmt.Errorf("%q is not a video identifier", videoID)
 	}
-	body, err := c.get(ctx, target, maxImageBytes)
-	if err != nil {
-		return nil, err
+
+	var err error
+	for _, target := range targets {
+		var body string
+		if body, err = c.get(ctx, target, maxImageBytes); err == nil {
+			return []byte(body), nil
+		}
 	}
-	return []byte(body), nil
+	return nil, err
 }
 
 // Resolve turns a handle into the channel identifier its feed is keyed by. The

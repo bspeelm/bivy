@@ -36,8 +36,9 @@ type player interface {
 type artist interface {
 	// Fetch returns a video's picture as the bytes a server sent.
 	Fetch(ctx context.Context, videoID string) ([]byte, error)
-	// Draw turns those bytes into what the terminal understands.
-	Draw(data []byte, cols, rows int) (string, error)
+	// Draw turns those bytes into what the terminal understands, for cells of
+	// the size the terminal said they are.
+	Draw(data []byte, cols, rows int, cell graphics.Cell) (string, error)
 }
 
 // pictures is the real artist: feed fetches, graphics draws.
@@ -47,15 +48,17 @@ func (p pictures) Fetch(ctx context.Context, videoID string) ([]byte, error) {
 	return p.feeds.Thumbnail(ctx, videoID)
 }
 
-func (p pictures) Draw(data []byte, cols, rows int) (string, error) {
-	return graphics.Render(data, cols, rows)
+func (p pictures) Draw(data []byte, cols, rows int, cell graphics.Cell) (string, error) {
+	return graphics.Render(data, cols, rows, cell)
 }
 
 // screen is what the browser needs from a terminal.
 type screen interface {
 	Graphics() graphics.Capability
+	Cell() graphics.Cell
 	Size() (width, height int)
 	Draw(frame string) error
+	DrawArt(row int, art string) error
 	Keys() <-chan term.Press
 	Resized() <-chan struct{}
 	Close() error
@@ -106,6 +109,13 @@ type browser struct {
 	// channels means those results are channels.
 	// line is what has been typed into the command line, and typing means it
 	// has the keyboard.
+	// busy means what is on screen is still arriving.
+	busy bool
+	// more is how to fetch the next page of whatever is on screen, and nil
+	// where there is no next page. A closure because every screen loads more
+	// of itself differently and the key that asks does not care which.
+	more func(ctx context.Context, from int) ([]follow.Row, error)
+
 	// back is what escape returns to, one entry per screen gone into. A stack
 	// rather than a slot: a channel opened from a search that came from the
 	// dashboard is three screens deep, and escape means the one before this.
@@ -244,6 +254,8 @@ func (b *browser) handleRune(ctx context.Context, r rune) (done bool) {
 		b.enter(ctx)
 	case 'f':
 		b.followRow(ctx)
+	case 'm':
+		b.loadMore(ctx)
 	case '/':
 		// The one command common enough to deserve a key, opened with its
 		// name already in the line so the same surface handles both.
@@ -448,9 +460,11 @@ func (b *browser) unfollow(target string) {
 
 // refresh fetches the followed feeds again.
 func (b *browser) refresh(ctx context.Context) {
-	b.status = "refreshing…"
+	b.busy, b.status = true, ""
 	_ = b.draw()
-	if err := b.load(ctx); err != nil {
+	err := b.load(ctx)
+	b.busy = false
+	if err != nil {
 		b.status = err.Error()
 	}
 }
@@ -486,18 +500,25 @@ func (b *browser) followRow(ctx context.Context) {
 func (b *browser) runChannelSearch(ctx context.Context, query string) {
 	b.push()
 	b.query, b.channels, b.viewing = query, true, ""
-	b.status = "searching…"
-	b.rows, b.selected = nil, 0
+	b.rows, b.selected, b.busy = nil, 0, true
+	b.status = ""
 	_ = b.draw()
 
 	found, err := b.app.search.Channels(ctx, query, dashboardRows)
+	b.busy = false
 	if err != nil {
 		b.status = searchTrouble(err)
 		return
 	}
 
-	b.status = ""
 	b.rows = follow.ChannelResults(b.state, found)
+	b.more = func(ctx context.Context, from int) ([]follow.Row, error) {
+		next, err := b.app.search.Channels(ctx, query, from+pageSize)
+		if err != nil {
+			return nil, err
+		}
+		return follow.ChannelResults(b.state, next), nil
+	}
 }
 
 // view is one screen, kept so that escape can put it back.
@@ -581,15 +602,15 @@ func (b *browser) open(ctx context.Context, id, title string) {
 	}
 
 	b.push()
-	b.status = "opening " + title + "…"
 	b.rows, b.selected, b.query, b.channels = nil, 0, "", false
-	b.viewing = title
+	b.viewing, b.busy, b.status = title, true, ""
 	_ = b.draw()
 
 	ch, err := b.app.feeds.Fetch(ctx, id)
 	if err != nil && b.app.search != nil {
 		ch, err = b.app.search.Uploads(ctx, id, dashboardRows)
 	}
+	b.busy = false
 	if err != nil {
 		b.pop()
 		b.status = "could not open " + title + ": " + err.Error()
@@ -600,12 +621,29 @@ func (b *browser) open(ctx context.Context, id, title string) {
 	}
 
 	b.status = ""
-	b.rows = follow.Results(b.state, ch.Videos)
-	for i := range b.rows {
-		// The channel is the screen, so every row saying it is noise.
-		b.rows[i].Channel = ""
-		b.rows[i].ChannelID = id
+	b.rows = b.channelRows(id, ch.Videos)
+	b.more = func(ctx context.Context, from int) ([]follow.Row, error) {
+		// A feed carries what it carries; only the extractor pages.
+		if b.app.search == nil {
+			return nil, errors.New("that needs yt-dlp")
+		}
+		next, err := b.app.search.Uploads(ctx, id, from+pageSize)
+		if err != nil {
+			return nil, err
+		}
+		return b.channelRows(id, next.Videos), nil
 	}
+}
+
+// channelRows is a channel's videos as rows. The channel is the screen, so
+// every row repeating its name is noise.
+func (b *browser) channelRows(id string, videos []media.Video) []follow.Row {
+	rows := follow.Results(b.state, videos)
+	for i := range rows {
+		rows[i].Channel = ""
+		rows[i].ChannelID = id
+	}
+	return rows
 }
 
 // runSearch replaces the rows with results, keeping the screen to come back
@@ -613,18 +651,25 @@ func (b *browser) open(ctx context.Context, id, title string) {
 func (b *browser) runSearch(ctx context.Context, query string) {
 	b.push()
 	b.query, b.channels, b.viewing = query, false, ""
-	b.status = "searching…"
-	b.rows, b.selected = nil, 0
+	b.rows, b.selected, b.busy = nil, 0, true
+	b.status = ""
 	_ = b.draw()
 
 	results, err := b.app.search.Search(ctx, query, dashboardRows)
+	b.busy = false
 	if err != nil {
 		b.status = searchTrouble(err)
 		return
 	}
 
-	b.status = ""
 	b.rows = follow.Results(b.state, results)
+	b.more = func(ctx context.Context, from int) ([]follow.Row, error) {
+		found, err := b.app.search.Search(ctx, query, from+pageSize)
+		if err != nil {
+			return nil, err
+		}
+		return follow.Results(b.state, found), nil
+	}
 }
 
 // leaveResults goes back one screen.
@@ -636,6 +681,60 @@ func searchTrouble(err error) string {
 		return "yt-dlp is not installed, and search needs it — the dashboard does not"
 	}
 	return "search failed: " + err.Error()
+}
+
+// loadMore adds the next page to what is on screen.
+//
+// A page at a time rather than everything, because everything is a request for
+// thirty more rows nobody has scrolled to yet — and the cursor stays where it
+// was, so the rows that arrive are below where the reader already is.
+func (b *browser) loadMore(ctx context.Context) {
+	if b.more == nil {
+		b.status = "nothing more to load here"
+		return
+	}
+
+	was := len(b.rows)
+	b.busy, b.status = true, ""
+	_ = b.draw()
+
+	rows, err := b.more(ctx, was)
+	b.busy = false
+	if err != nil {
+		b.status = "could not load more: " + err.Error()
+		return
+	}
+
+	added := 0
+	for _, r := range rows {
+		if !b.showing(r) {
+			b.rows = append(b.rows, r)
+			added++
+		}
+	}
+	if added == 0 {
+		b.more = nil
+		b.status = "that is all of it"
+		return
+	}
+	b.status = fmt.Sprintf("%d more", added)
+}
+
+// showing reports whether a row is already on screen, so a page that overlaps
+// the one before it does not double anything up.
+func (b *browser) showing(r follow.Row) bool {
+	for _, have := range b.rows {
+		if r.IsChannel() {
+			if have.ChannelID == r.ChannelID {
+				return true
+			}
+			continue
+		}
+		if have.Video.ID == r.Video.ID {
+			return true
+		}
+	}
+	return false
 }
 
 // enter is what the row under the cursor is for: a channel opens, a video
@@ -731,9 +830,9 @@ func (b *browser) load(ctx context.Context) error {
 	b.query, b.channels, b.viewing = "", false, ""
 	b.rows = follow.Dashboard(state, fetched, dashboardRows)
 	b.selected = tui.Move(b.selected, 0, len(b.rows))
-	if b.status == "refreshing…" {
-		b.status = ""
-	}
+	// The dashboard shows everything the feeds carried, so there is no next
+	// page of it to ask for.
+	b.more = nil
 	return nil
 }
 
@@ -748,7 +847,7 @@ func (b *browser) failedNow() []string {
 
 // picture is the drawn thumbnail for the row under the cursor: what is worth
 // a request is what somebody is looking at.
-func (b *browser) picture(ctx context.Context, cols, rows int) string {
+func (b *browser) picture(ctx context.Context, cols, rows int, cell graphics.Cell) string {
 	if b.app.art == nil || cols < 1 || rows < 1 || b.selected >= len(b.rows) {
 		return ""
 	}
@@ -774,7 +873,7 @@ func (b *browser) picture(ctx context.Context, cols, rows int) string {
 		b.remember(id, data)
 	}
 
-	drawn, err := b.app.art.Draw(data, cols, rows)
+	drawn, err := b.app.art.Draw(data, cols, rows, cell)
 	if err != nil {
 		drawn = ""
 	}
@@ -805,9 +904,11 @@ func (b *browser) remember(id string, data []byte) {
 
 func (b *browser) draw() error {
 	width, height := b.screen.Size()
-	cols, rows := tui.ArtBox(width, height)
-	return b.screen.Draw(tui.Render(tui.Dashboard{
-		Art:         b.picture(context.Background(), cols, rows),
+	cell := b.screen.Cell()
+	cols, rows := tui.ArtBox(width, height, cell)
+	model := tui.Dashboard{
+		Art:         b.picture(context.Background(), cols, rows, cell),
+		Cell:        cell,
 		Rows:        b.rows,
 		Failed:      b.failedNow(),
 		Reached:     len(b.fetched),
@@ -820,10 +921,18 @@ func (b *browser) draw() error {
 		Query:       b.query,
 		Channels:    b.channels,
 		Viewing:     b.viewing,
+		Busy:        b.busy,
 		Line:        b.line,
 		Typing:      b.typing,
 		Interactive: true,
-	}))
+	}
+
+	if err := b.screen.Draw(tui.Render(model)); err != nil {
+		return err
+	}
+	// After the text, and only when it changed. Placed by row rather than
+	// written into the frame, so it cannot shift where a line of text lands.
+	return b.screen.DrawArt(model.ArtRow(), model.Art)
 }
 
 // playbackTrouble explains a video that would not play.

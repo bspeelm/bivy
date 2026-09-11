@@ -367,7 +367,7 @@ func TestThumbnail(t *testing.T) {
 	})
 	// The thumbnail host is not one of the bases the test server stands in
 	// for, so this asserts what it builds rather than what it fetches.
-	if got := media.ThumbnailURL("dQw4w9WgXcQ"); got != "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg" {
+	if got := media.ThumbnailURL("dQw4w9WgXcQ"); got != "https://i.ytimg.com/vi/dQw4w9WgXcQ/hq720.jpg" {
 		t.Errorf("thumbnail address = %q", got)
 	}
 	_ = asked

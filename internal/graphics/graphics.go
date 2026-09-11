@@ -16,9 +16,12 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	_ "image/jpeg" // thumbnails arrive as JPEG
 	"image/png"
 	"io"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -90,9 +93,12 @@ const chunk = 4096
 // Render turns image bytes into the sequences that draw them, scaled into a
 // box of cells. Decoded and re-encoded rather than forwarded: the only way to
 // be sure remote bytes are an image is to have read them as one.
-func Render(data []byte, cols, rows int) (string, error) {
+func Render(data []byte, cols, rows int, cell Cell) (string, error) {
 	if cols < 1 || rows < 1 {
 		return "", fmt.Errorf("a picture needs room: %dx%d cells", cols, rows)
+	}
+	if !cell.Known() {
+		cell = Assumed
 	}
 
 	img, _, err := image.Decode(bytes.NewReader(data))
@@ -101,8 +107,11 @@ func Render(data []byte, cols, rows int) (string, error) {
 	}
 
 	// Scaled here rather than by the terminal, which would scale only after
-	// the whole image had gone through the pseudo-terminal.
-	img = scale(img, cols*cellWidth, rows*cellHeight)
+	// the whole image crossed the pseudo-terminal.
+	// Scaled to fit the box, then padded to fill it exactly: the protocol
+	// stretches whatever it is given across the cells it is told about, and a
+	// thumbnail is not always the shape the box was built for.
+	img = letterbox(scale(img, cols*cell.Width, rows*cell.Height), cols*cell.Width, rows*cell.Height)
 
 	var encoded bytes.Buffer
 	if err := png.Encode(&encoded, img); err != nil {
@@ -135,13 +144,59 @@ func Render(data []byte, cols, rows int) (string, error) {
 	return b.String(), nil
 }
 
-// A cell is roughly twice as tall as it is wide. The exact figure belongs to
-// the font, and the protocol scales what it is given into the cells it is told
-// about — so being a little out changes sharpness and nothing else.
-const (
-	cellWidth  = 8
-	cellHeight = 16
-)
+// Cell is a terminal cell in pixels. It belongs to the font, and guessing it
+// is what makes a picture the wrong shape: the protocol stretches what it is
+// given to fill the cells it is told about.
+type Cell struct{ Width, Height int }
+
+// Assumed is the fallback where the terminal will not say.
+var Assumed = Cell{Width: 8, Height: 16}
+
+// Known reports whether these are a terminal's own figures.
+func (c Cell) Known() bool { return c.Width > 0 && c.Height > 0 }
+
+// CellSize asks the terminal how big one cell is: CSI 16 t, answered with
+// CSI 6 ; height ; width t. Silence is handled the way the graphics query
+// handles it.
+func CellSize(in io.Reader, out io.Writer) Cell {
+	if _, err := io.WriteString(out, "\x1b[16t"); err != nil {
+		return Cell{}
+	}
+
+	answered := make(chan Cell, 1)
+	go func() {
+		buf := make([]byte, 64)
+		n, err := in.Read(buf)
+		if err != nil {
+			answered <- Cell{}
+			return
+		}
+		answered <- parseCell(string(buf[:n]))
+	}()
+
+	select {
+	case c := <-answered:
+		return c
+	case <-time.After(probeWait):
+		return Cell{}
+	}
+}
+
+var cellReply = regexp.MustCompile(`\x1b\[6;([0-9]+);([0-9]+)t`)
+
+// parseCell reads the height and width out of the terminal's answer.
+func parseCell(reply string) Cell {
+	m := cellReply.FindStringSubmatch(reply)
+	if m == nil {
+		return Cell{}
+	}
+	height, _ := strconv.Atoi(m[1])
+	width, _ := strconv.Atoi(m[2])
+	if width <= 0 || height <= 0 || width > 64 || height > 128 {
+		return Cell{}
+	}
+	return Cell{Width: width, Height: height}
+}
 
 // scale shrinks an image to fit a box, keeping its shape. Box-averaged rather
 // than nearest-neighbour: dropping pixels to reduce a photograph makes a field
@@ -172,6 +227,23 @@ func scale(src image.Image, maxW, maxH int) image.Image {
 			dst.Set(x, y, average(src, x0, y0, x1, y1))
 		}
 	}
+	return dst
+}
+
+// letterbox centres an image in a box of exactly this size, on black.
+func letterbox(src image.Image, width, height int) image.Image {
+	b := src.Bounds()
+	if b.Dx() == width && b.Dy() == height {
+		return src
+	}
+
+	dst := image.NewRGBA(image.Rect(0, 0, width, height))
+	draw.Draw(dst, dst.Bounds(), image.NewUniform(color.Black), image.Point{}, draw.Src)
+	at := image.Rect(
+		(width-b.Dx())/2, (height-b.Dy())/2,
+		(width-b.Dx())/2+b.Dx(), (height-b.Dy())/2+b.Dy(),
+	)
+	draw.Draw(dst, at, src, b.Min, draw.Src)
 	return dst
 }
 

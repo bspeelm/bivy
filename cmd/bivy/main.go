@@ -31,9 +31,13 @@ var Version = "dev"
 // stateFile is the whole of what bivy remembers.
 const stateFile = "follows.json"
 
-// dashboardRows is how far back the dashboard goes. Two screens' worth: enough
-// to scroll through what is new, short of being an archive to browse.
-const dashboardRows = 30
+// dashboardRows is how far back the dashboard goes, and pageSize is how much
+// more of anything arrives at a time. One screenful of scrolling, so that
+// asking for more is a decision rather than a habit.
+const (
+	dashboardRows = 30
+	pageSize      = 30
+)
 
 // fetcher is what the application needs from the network, named here rather
 // than in the package that implements it, so the tests below run without a
@@ -103,6 +107,7 @@ Once bivy is open, most of it is keys rather than commands:
     enter                   play the row in mpv
     /                       search
     f                       follow the channel this row came from
+    m                       load thirty more
     esc                     back to the dashboard
     r                       refresh
     :q                      quit

@@ -124,7 +124,7 @@ func TestParseReadsResults(t *testing.T) {
 	if !first.Published.IsZero() {
 		t.Errorf("published = %s, want it left unset", first.Published)
 	}
-	if got, want := first.Thumbnail, "https://i.ytimg.com/vi/kYJ8r4d6gy0/hqdefault.jpg"; got != want {
+	if got, want := first.Thumbnail, "https://i.ytimg.com/vi/kYJ8r4d6gy0/hq720.jpg"; got != want {
 		t.Errorf("thumbnail = %q, want %q", got, want)
 	}
 
@@ -175,7 +175,7 @@ func TestParseDerivesTheThumbnailAddress(t *testing.T) {
 	const redirect = `{"id":"kYJ8r4d6gy0","title":"T","thumbnails":[{"url":"https://attacker.example/track"}]}`
 
 	videos := Parse(strings.NewReader(redirect))
-	if got, want := videos[0].Thumbnail, "https://i.ytimg.com/vi/kYJ8r4d6gy0/hqdefault.jpg"; got != want {
+	if got, want := videos[0].Thumbnail, "https://i.ytimg.com/vi/kYJ8r4d6gy0/hq720.jpg"; got != want {
 		t.Errorf("thumbnail = %q, want %q", got, want)
 	}
 }

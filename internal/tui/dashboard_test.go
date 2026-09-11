@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bspeelm/bivy/internal/follow"
+	"github.com/bspeelm/bivy/internal/graphics"
 	"github.com/bspeelm/bivy/internal/media"
 )
 
@@ -552,7 +553,7 @@ func TestTheChannelListOffersFollowNotPlay(t *testing.T) {
 func TestThePictureScalesWithTheWindow(t *testing.T) {
 	var previous int
 	for _, width := range []int{80, 120, 160, 200} {
-		cols, rows := ArtBox(width, 40)
+		cols, rows := ArtBox(width, 40, graphics.Assumed)
 		if cols == 0 {
 			t.Fatalf("no picture at width %d", width)
 		}
@@ -578,7 +579,7 @@ func TestThePictureScalesWithTheWindow(t *testing.T) {
 // titles out.
 func TestNoPictureWhereThereIsNoRoom(t *testing.T) {
 	for _, size := range [][2]int{{40, 24}, {80, 8}, {30, 30}, {0, 0}} {
-		if cols, rows := ArtBox(size[0], size[1]); cols != 0 || rows != 0 {
+		if cols, rows := ArtBox(size[0], size[1], graphics.Assumed); cols != 0 || rows != 0 {
 			t.Errorf("a %dx%d window got a %dx%d picture", size[0], size[1], cols, rows)
 		}
 	}
@@ -615,14 +616,18 @@ func TestTitlesFormOneColumnBesideThePicture(t *testing.T) {
 	}
 }
 
-// Only the highlighted row has a picture, and there is only ever one.
-func TestThereIsOnePicture(t *testing.T) {
+// The picture is not in the frame at all: it is positioned by row and drawn
+// after the text, so nothing about it can shift where a line of text lands.
+func TestThePictureIsNotInTheFrame(t *testing.T) {
 	d := Dashboard{
 		Rows: manyRows(12), Now: now, Width: 100, Height: 24,
 		Interactive: true, Selected: 3, Art: "<PIC>",
 	}
-	if got := strings.Count(Render(d), "<PIC>"); got != 1 {
-		t.Errorf("the frame draws %d pictures, want 1", got)
+	if strings.Contains(Render(d), "<PIC>") {
+		t.Error("the picture was written into the frame")
+	}
+	if d.ArtRow() < 3 {
+		t.Errorf("ArtRow = %d, which is on the title or the rule", d.ArtRow())
 	}
 }
 
@@ -655,5 +660,115 @@ func TestWhenNoFeedAnswersItSaysSoOnce(t *testing.T) {
 	only := status(Dashboard{Failed: []string{"Aye"}, Reached: 0})
 	if !strings.Contains(only, "Aye") {
 		t.Errorf("a single followed channel failing should name it: %q", only)
+	}
+}
+
+// A small picture in the corner of a tall screen reads as something that
+// failed to fill the space. Halfway down its pane it reads as a pane.
+func TestThePictureSitsInTheMiddleOfItsPane(t *testing.T) {
+	d := Dashboard{
+		Rows: manyRows(40), Now: now, Width: 100, Height: 40,
+		Interactive: true, Art: "<PIC>",
+	}
+
+	_, artRows := ArtBox(100, 40, graphics.Assumed)
+	visible := d.visibleRows()
+	if want := 3 + (visible-artRows)/2; d.ArtRow() != want {
+		t.Errorf("ArtRow = %d, want %d (%d rows of list, %d of picture)",
+			d.ArtRow(), want, visible, artRows)
+	}
+	// And it never runs past the rule at the bottom.
+	if d.ArtRow()+artRows > 3+visible {
+		t.Errorf("a picture at row %d and %d tall reaches past the list", d.ArtRow(), artRows)
+	}
+}
+
+// A pane taller than the list has nowhere to centre into, and starts at the
+// top of the list rather than above it.
+func TestAPictureTallerThanTheListStartsAtTheTop(t *testing.T) {
+	d := Dashboard{
+		Rows: manyRows(3), Now: now, Width: 160, Height: 24,
+		Interactive: true, Art: "<PIC>",
+	}
+	if got := d.ArtRow(); got != 3 {
+		t.Errorf("ArtRow = %d, want the first list row", got)
+	}
+}
+
+// No picture, no row.
+func TestNoPictureNoRow(t *testing.T) {
+	for _, d := range []Dashboard{
+		{Rows: manyRows(5), Width: 100, Height: 24, Interactive: true},
+		{Rows: nil, Width: 100, Height: 24, Interactive: true, Art: "<PIC>"},
+		{Rows: manyRows(5), Width: 40, Height: 24, Interactive: true, Art: "<PIC>"},
+	} {
+		if got := d.ArtRow(); got != 0 {
+			t.Errorf("ArtRow = %d with no picture to place", got)
+		}
+	}
+}
+
+// A frame is exactly as tall as the window it is for. One line too many and
+// the terminal scrolls; one too few and the last frame's bottom row survives.
+func TestAFrameIsExactlyTheHeightOfItsWindow(t *testing.T) {
+	for _, c := range []struct {
+		width, height, rows int
+		art                 string
+		typing              bool
+	}{
+		{200, 45, 30, "<A>", false},
+		{200, 45, 30, "", false},
+		{100, 24, 5, "<A>", false},
+		{100, 24, 0, "", false},
+		{100, 16, 40, "<A>", false},
+		{80, 14, 40, "<A>", false},
+		{100, 24, 5, "<A>", true},
+		{60, 20, 3, "", true},
+	} {
+		d := Dashboard{
+			Rows: manyRows(c.rows), Now: now, Width: c.width, Height: c.height,
+			Interactive: true, Art: c.art, Typing: c.typing,
+		}
+		if got := strings.Count(Render(d), "\n"); got != c.height {
+			t.Errorf("a %dx%d window with %d rows (art %v, typing %v) rendered %d lines, want %d",
+				c.width, c.height, c.rows, c.art != "", c.typing, got, c.height)
+		}
+	}
+}
+
+// A cell belongs to the font. A picture sized for cells twice as tall as they
+// are wide, drawn in a font where they are half that, is stretched sideways —
+// the protocol fills the cells it is told about whatever shape the image was.
+func TestTheRowCountFollowsTheTerminalsCells(t *testing.T) {
+	tall := graphics.Cell{Width: 8, Height: 16}
+	square := graphics.Cell{Width: 10, Height: 14}
+
+	_, tallRows := ArtBox(120, 40, tall)
+	_, squareRows := ArtBox(120, 40, square)
+
+	if tallRows >= squareRows {
+		t.Errorf("a picture is %d rows in tall cells and %d in squarer ones; "+
+			"squarer cells need more rows for the same shape", tallRows, squareRows)
+	}
+
+	// The picture keeps its shape in both: columns times cell width over rows
+	// times cell height should be about sixteen to nine.
+	for _, c := range []struct {
+		name string
+		cell graphics.Cell
+	}{{"tall", tall}, {"square", square}} {
+		cols, rows := ArtBox(120, 40, c.cell)
+		got := float64(cols*c.cell.Width) / float64(rows*c.cell.Height)
+		if got < 1.5 || got > 2.1 {
+			t.Errorf("in %s cells a %dx%d picture is %.2f wide for its height, want about 1.78",
+				c.name, cols, rows, got)
+		}
+	}
+}
+
+// An unknown cell size falls back rather than dividing by zero.
+func TestArtBoxWithoutACellSize(t *testing.T) {
+	if cols, rows := ArtBox(120, 40, graphics.Cell{}); cols == 0 || rows == 0 {
+		t.Errorf("ArtBox with no cell size gave %dx%d", cols, rows)
 	}
 }

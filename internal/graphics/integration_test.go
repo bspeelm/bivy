@@ -37,7 +37,7 @@ func TestARealThumbnailBecomesARealSequence(t *testing.T) {
 		t.Fatalf("fetched %d bytes, which is not a picture", len(data))
 	}
 
-	out, err := Render(data, 28, 7)
+	out, err := Render(data, 28, 7, Assumed)
 	if err != nil {
 		t.Fatalf("a real thumbnail would not render: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestARealThumbnailBecomesARealSequence(t *testing.T) {
 
 	bounds := img.Bounds()
 	t.Logf("the terminal receives a %dx%d PNG", bounds.Dx(), bounds.Dy())
-	if bounds.Dx() > 28*cellWidth || bounds.Dy() > 7*cellHeight {
+	if bounds.Dx() > 28*Assumed.Width || bounds.Dy() > 7*Assumed.Height {
 		t.Errorf("the picture is %dx%d pixels for %dx%d cells; it was not scaled down",
 			bounds.Dx(), bounds.Dy(), 28, 7)
 	}
