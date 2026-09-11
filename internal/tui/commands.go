@@ -97,6 +97,16 @@ type badArgument struct{ name, wanted string }
 
 func (e badArgument) Error() string { return e.name + " what? give it " + e.wanted }
 
+// ambiguous is a prefix that more than one command answers to.
+type ambiguous struct {
+	typed   string
+	matches []string
+}
+
+func (e ambiguous) Error() string {
+	return fmt.Sprintf("%q could be %s", e.typed, strings.Join(e.matches, " or "))
+}
+
 // unknownCommand names what was typed and, where one is close, what was
 // probably meant.
 type unknownCommand struct{ typed, nearest string }
@@ -109,17 +119,34 @@ func (e unknownCommand) Error() string {
 }
 
 // Parse turns a command line into an intent.
+//
+// A command may be shortened to any prefix only one command answers to, so
+// ":q" is quit and ":se cats" is a search. That is the spelling anyone who has
+// used a modal editor will try first, and it is what makes quitting cheap
+// enough to be worth taking off the keyboard.
 func Parse(line string) (Intent, error) {
 	name, arg := split(line)
 	if name == "" {
 		return nil, nil
 	}
-	for _, c := range Commands {
-		if c.Name == name {
-			return c.run(arg)
-		}
+
+	// An exact name wins over being a prefix of a longer one.
+	if c, found := lookup(name); found {
+		return c.run(arg)
 	}
-	return nil, unknownCommand{typed: name, nearest: nearest(name)}
+
+	switch m := Matching(name); len(m) {
+	case 1:
+		return m[0].run(arg)
+	case 0:
+		return nil, unknownCommand{typed: name, nearest: nearest(name)}
+	default:
+		names := make([]string, 0, len(m))
+		for _, c := range m {
+			names = append(names, c.Name)
+		}
+		return nil, ambiguous{typed: name, matches: names}
+	}
 }
 
 // split separates the command name from its argument.

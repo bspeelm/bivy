@@ -80,6 +80,11 @@ everything there is:
 `:follow Papa Meat` follows the channel those results came from without
 leaving the screen.
 
+A command can be shortened to any prefix only one command answers to, so `:q`
+quits and `:se cats` searches. Quitting is deliberately not a key: `q` sat one
+keystroke from every other key on the list, and hitting it by accident costs
+the screen you were reading.
+
 A command exists because it takes an argument or because it is rare; anything
 else is a key. That rule is ADR-011 and it is what keeps the list short.
 

@@ -363,6 +363,18 @@ anything §3 refuses. A command that would download something, log in, or open a
 page is refused for the reasons already recorded, and the command line existing
 does not reopen any of them.
 
+### Quitting is not a key
+
+`q` sat one keystroke from every other key on the list, and the cost of
+hitting it by accident is losing the screen you were reading — a dashboard
+that took a fetch per followed channel to build, or a search you have not
+finished looking at. It costs `:q` instead.
+
+That is only bearable because a command may be shortened to any prefix one
+command answers to, which is the spelling anyone who has used a modal editor
+tries first. Ctrl-C still leaves, because a program that cannot be left from
+the keyboard is worse than one that can be left by accident.
+
 **What would reopen this:** nothing. The question was whether to have one; it
 is answered. Whether a particular command should exist is answered by the rule
 above, in the pull request that proposes it.

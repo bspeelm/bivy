@@ -177,10 +177,14 @@ func (b *browser) handle(ctx context.Context, press term.Press) (done bool) {
 	return false
 }
 
+// handleRune is the list's keys.
+//
+// Quitting is not among them. It is one keystroke away from every other key on
+// this list, and the cost of hitting it by accident is losing the screen you
+// were reading — so it costs three keystrokes and lives on the command line
+// with the other rare things (ADR-011).
 func (b *browser) handleRune(ctx context.Context, r rune) (done bool) {
 	switch r {
-	case 'q':
-		return true
 	case 'j':
 		b.selected = tui.Move(b.selected, 1, len(b.rows))
 	case 'k':

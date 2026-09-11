@@ -551,9 +551,10 @@ func TestPlayingWithAnEmptyDashboard(t *testing.T) {
 	}
 }
 
-// The list's own quit key, which the helper does not use because it does not
-// work from the search box.
-func TestQQuitsFromTheList(t *testing.T) {
+// Quitting is not a key. It is one keystroke away from every other key on the
+// list, and the cost of hitting it by accident is losing the screen you were
+// reading.
+func TestQDoesNotQuitTheList(t *testing.T) {
 	b := newBrowser(t)
 
 	b.start(t)
@@ -562,8 +563,26 @@ func TestQQuitsFromTheList(t *testing.T) {
 
 	select {
 	case <-b.done:
+		t.Fatal("q quit the list; it is supposed to cost :q")
+	case <-time.After(300 * time.Millisecond):
+	}
+	b.quit(t)
+}
+
+// :q, the spelling anyone who has used a modal editor will try first.
+func TestColonQQuits(t *testing.T) {
+	b := newBrowser(t)
+
+	b.start(t)
+	b.eventually(t, "Nothing to show")
+	b.screen.press(key(':'))
+	b.screen.typed("q")
+	b.screen.press(named(term.KeyEnter))
+
+	select {
+	case <-b.done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("q did not quit the list")
+		t.Fatal(":q did not quit")
 	}
 }
 

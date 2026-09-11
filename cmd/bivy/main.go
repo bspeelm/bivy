@@ -100,7 +100,7 @@ Once bivy is open, most of it is keys rather than commands:
     /                       search
     esc                     back to the dashboard
     r                       refresh
-    q                       quit
+    :q                      quit
 
 Playing needs mpv, and searching needs yt-dlp. The dashboard needs neither.
 bivy never logs in, reads no cookies, and downloads nothing.
