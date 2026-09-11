@@ -306,6 +306,41 @@ func TestTheReproducibleBuildPinsItsCompiler(t *testing.T) {
 	}
 }
 
+// The integration tests run somewhere, and that somewhere is not the gate.
+// Both halves matter: tests nothing ever runs are decoration, and a gate that
+// depends on a third party is one whose red means nothing about the diff.
+func TestTheIntegrationTestsRunOnTheirOwnAndNotOnTheGate(t *testing.T) {
+	plan := read(t, "PLAN.md")
+	if !strings.Contains(plan, "integration tests on a schedule") {
+		t.Skip("§10 no longer claims the integration tests run on a schedule")
+	}
+
+	dir := filepath.Join(".github", "workflows")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var scheduled bool
+	for _, e := range entries {
+		body := read(t, filepath.Join(dir, e.Name()))
+		runsThem := strings.Contains(body, "make integration") ||
+			strings.Contains(body, "-tags=integration")
+		if !runsThem {
+			continue
+		}
+		if strings.Contains(body, "pull_request") {
+			t.Errorf("%s runs the integration tests on a pull request, which puts a third party in the gate", e.Name())
+		}
+		if strings.Contains(body, "schedule:") {
+			scheduled = true
+		}
+	}
+	if !scheduled {
+		t.Errorf("§10 says the integration tests run on a schedule, and no workflow in %s schedules them", dir)
+	}
+}
+
 // docs/review/ says in prose whether a release has happened yet. That sentence
 // is read by someone deciding whether to trust the directory, and it is the
 // kind of sentence that stays true for exactly one release.
