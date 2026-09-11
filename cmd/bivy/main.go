@@ -162,7 +162,7 @@ func (a *app) dashboard(ctx context.Context) int {
 		return a.fail(err)
 	}
 
-	fetched, failed := a.fetchAll(ctx, state)
+	fetched, failed, _ := a.fetchAll(ctx, state)
 
 	rows := follow.Dashboard(state, fetched, dashboardRows)
 	fmt.Fprint(a.out, tui.Render(tui.Dashboard{
@@ -193,13 +193,14 @@ func (a *app) dashboard(ctx context.Context) int {
 // follow list is allowed to be long, and forty simultaneous requests is a
 // different program's network behaviour. Failures are collected rather than
 // returned, so one unreachable channel does not cost the dashboard.
-func (a *app) fetchAll(ctx context.Context, state follow.State) (fetched []media.Channel, failed []string) {
+func (a *app) fetchAll(ctx context.Context, state follow.State) (fetched []media.Channel, failed []string, stale bool) {
 	if len(state.Channels) == 0 {
-		return nil, nil
+		return nil, nil, false
 	}
 
 	results := make([]media.Channel, len(state.Channels))
 	errs := make([]error, len(state.Channels))
+	viaExtractor := make([]bool, len(state.Channels))
 
 	const parallel = 4
 	sem := make(chan struct{}, parallel)
@@ -211,7 +212,17 @@ func (a *app) fetchAll(ctx context.Context, state follow.State) (fetched []media
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+
 			results[i], errs[i] = a.feeds.Fetch(ctx, c.ID)
+			if errs[i] == nil || a.search == nil {
+				return
+			}
+			// The feed would not answer. Asking the extractor instead costs
+			// the publish times, and the alternative is showing nothing at
+			// all (ADR-013).
+			if ch, err := a.search.Uploads(ctx, c.ID, dashboardRows); err == nil && len(ch.Videos) > 0 {
+				results[i], errs[i], viaExtractor[i] = ch, nil, true
+			}
 		}()
 	}
 	wg.Wait()
@@ -225,10 +236,13 @@ func (a *app) fetchAll(ctx context.Context, state follow.State) (fetched []media
 			failed = append(failed, name)
 			continue
 		}
+		if viaExtractor[i] {
+			stale = true
+		}
 		fetched = append(fetched, results[i])
 	}
 	sort.Strings(failed)
-	return fetched, failed
+	return fetched, failed, stale
 }
 
 func (a *app) follow(ctx context.Context, argument string) int {

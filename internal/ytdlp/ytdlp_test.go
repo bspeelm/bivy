@@ -230,3 +230,37 @@ func TestSearchHonoursACancelledContext(t *testing.T) {
 		t.Fatal("a cancelled context still ran a search")
 	}
 }
+
+// The identifier is checked before it is interpolated into a URL that becomes
+// an argv.
+func TestUploadsRefusesSomethingThatIsNotAChannel(t *testing.T) {
+	c := &Client{Binary: "no-such-extractor-anywhere"}
+
+	for _, bad := range []string{"", "nonsense", "--exec=touch /tmp/pwned", "UC../../etc/passwd"} {
+		_, err := c.Uploads(context.Background(), bad, 5)
+		if err == nil {
+			t.Errorf("Uploads(%q) returned no error", bad)
+		}
+		if errors.Is(err, ErrNotInstalled) {
+			t.Errorf("Uploads(%q) reached the process instead of being refused", bad)
+		}
+	}
+}
+
+// A channel listing carries durations and no publish times, which is what the
+// fallback has to live with.
+func TestUploadsParsesWhatAChannelListingGives(t *testing.T) {
+	const listing = `{"id":"jH2_omQcJGI","title":"Ranking EVERY Pizza","duration":2842,"timestamp":null}
+{"id":"yoIObGNixd0","title":"The Horrors Of Burning Man","duration":1900}
+`
+	videos := Parse(strings.NewReader(listing))
+	if len(videos) != 2 {
+		t.Fatalf("%d videos, want 2", len(videos))
+	}
+	if videos[0].Duration == 0 {
+		t.Error("the duration was lost")
+	}
+	if !videos[0].Published.IsZero() {
+		t.Error("a publish time was invented")
+	}
+}

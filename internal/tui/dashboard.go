@@ -42,6 +42,10 @@ type Dashboard struct {
 	// is quietly short lies.
 	Failed  []string
 	Reached int
+	// Stale means some rows came from the extractor rather than a feed, and
+	// so carry no publish time. Said plainly, because a dashboard silently
+	// missing the thing it sorts by is a dashboard nobody can trust.
+	Stale bool
 	// Now anchors the relative timestamps, passed in rather than read so the
 	// output is a function of its arguments.
 	Now time.Time
@@ -370,6 +374,9 @@ func status(d Dashboard) string {
 		if summary := d.Rows[d.Selected].Summary; summary != "" {
 			return summary
 		}
+	}
+	if d.Stale {
+		return "some feeds are not answering — those rows came from the extractor, without dates"
 	}
 	if len(d.Failed) > 0 && d.Query == "" {
 		// Naming the channels is right when some got through and some did

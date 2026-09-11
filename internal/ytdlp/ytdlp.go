@@ -216,6 +216,35 @@ func (c *Client) Channels(ctx context.Context, query string, limit int) ([]media
 	return ParseChannels(strings.NewReader(out)), nil
 }
 
+// Uploads lists a channel's recent videos through the extractor.
+//
+// The feed is how bivy learns what a channel has posted (ADR-003). This is
+// what it does when the feed service will not answer, and ADR-013 is the
+// record of that: the argument is only that an empty dashboard is worse.
+//
+// What comes back has no publish times. The extractor does not provide them
+// without a request per video, and thirty of those is not a launch.
+func (c *Client) Uploads(ctx context.Context, channelID string, limit int) (media.Channel, error) {
+	if !media.IsChannelID(channelID) {
+		return media.Channel{}, fmt.Errorf("%q is not a channel identifier", channelID)
+	}
+	if limit < 1 || limit > MaxResults {
+		limit = MaxResults
+	}
+
+	out, err := c.run(ctx, "--playlist-end", strconv.Itoa(limit),
+		"--", "https://www.youtube.com/channel/"+channelID+"/videos")
+	if err != nil {
+		return media.Channel{}, err
+	}
+
+	ch := media.Channel{ID: channelID, Videos: Parse(strings.NewReader(out))}
+	for i := range ch.Videos {
+		ch.Videos[i].ChannelID = channelID
+	}
+	return ch, nil
+}
+
 // ParseChannels reads channel entries out of the extractor's output. Videos
 // and channels arrive through the same command, told apart by which of the
 // extractor's own readers produced each line.
