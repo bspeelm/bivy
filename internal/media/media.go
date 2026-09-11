@@ -39,11 +39,15 @@ func ThumbnailURL(videoID string) string {
 	return "https://i.ytimg.com/vi/" + videoID + "/hqdefault.jpg"
 }
 
-// Channel is a followed channel and the entries its feed currently carries.
+// Channel is a channel: the entries its feed currently carries when it came
+// from one, and what a search said about it when it came from a search.
 type Channel struct {
 	ID     string
 	Title  string
 	Videos []Video
+	// Description and Followers are what a search knows and a feed does not.
+	Description string
+	Followers   int
 }
 
 // Text is remote text made safe to print.

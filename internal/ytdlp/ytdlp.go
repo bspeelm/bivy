@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -47,6 +48,18 @@ func (c *Client) Search(ctx context.Context, query string, limit int) ([]media.V
 		return nil, err
 	}
 
+	out, err := c.run(ctx, "--", term)
+	if err != nil {
+		return nil, err
+	}
+	return Parse(strings.NewReader(out)), nil
+}
+
+// run executes the extractor and returns what it printed.
+//
+// Every argument before the caller's is a literal written here; the caller
+// supplies only what follows, already checked.
+func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, searchWait)
 	defer cancel()
 
@@ -55,18 +68,13 @@ func (c *Client) Search(ctx context.Context, query string, limit int) ([]media.V
 		binary = "yt-dlp"
 	}
 
-	// Every argument before the separator is a literal written here. The one
-	// after it is the only value that varies, and SearchTerm has already
-	// refused anything it would not recognise.
-	cmd := exec.CommandContext(ctx, binary,
+	cmd := exec.CommandContext(ctx, binary, append([]string{
 		"--flat-playlist",
 		"--dump-json",
 		"--no-warnings",
 		"--ignore-config",
 		"--no-playlist",
-		"--",
-		term,
-	)
+	}, args...)...)
 
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -75,14 +83,14 @@ func (c *Client) Search(ctx context.Context, query string, limit int) ([]media.V
 	if err != nil {
 		var notFound *exec.Error
 		if errors.As(err, &notFound) && errors.Is(notFound.Err, exec.ErrNotFound) {
-			return nil, ErrNotInstalled
+			return "", ErrNotInstalled
 		}
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("the search took longer than %s", searchWait)
+			return "", fmt.Errorf("the search took longer than %s", searchWait)
 		}
-		return nil, fmt.Errorf("the search failed: %s", firstLine(stderr.String(), err))
+		return "", fmt.Errorf("the search failed: %s", firstLine(stderr.String(), err))
 	}
-	return Parse(strings.NewReader(string(out))), nil
+	return string(out), nil
 }
 
 // SearchTerm builds the one argument that varies. The result always begins
@@ -116,6 +124,11 @@ type entry struct {
 	ChannelID string  `json:"channel_id"`
 	Duration  float64 `json:"duration"`
 	Timestamp int64   `json:"timestamp"`
+	// Extractor names which of the extractor's own readers produced the line,
+	// which is how a channel is told from a video.
+	Extractor   string `json:"ie_key"`
+	Description string `json:"description"`
+	Followers   int    `json:"channel_follower_count"`
 }
 
 // Parse reads the extractor's output, one JSON object per line. A malformed
@@ -171,4 +184,70 @@ func firstLine(stderr string, fallback error) string {
 		}
 	}
 	return fallback.Error()
+}
+
+// channelFilter is the search-results parameter that asks for channels rather
+// than videos. An opaque constant of the service's own, kept here as the one
+// place it is written down.
+const channelFilter = "EgIQAg%3D%3D"
+
+// Channels asks the extractor for channels matching a query.
+//
+// The whole argument is a URL bivy builds, so what reaches the argv begins
+// with https:// and cannot be read as an option however the query begins. The
+// query itself is escaped into it rather than concatenated.
+func (c *Client) Channels(ctx context.Context, query string, limit int) ([]media.Channel, error) {
+	query = strings.TrimSpace(media.Text(query))
+	if query == "" {
+		return nil, errors.New("nothing to search for")
+	}
+	if len(query) > 200 {
+		return nil, errors.New("that search is too long")
+	}
+	if limit < 1 || limit > MaxResults {
+		limit = MaxResults
+	}
+
+	target := "https://www.youtube.com/results?search_query=" +
+		url.QueryEscape(query) + "&sp=" + channelFilter
+
+	out, err := c.run(ctx, "--playlist-end", strconv.Itoa(limit), "--", target)
+	if err != nil {
+		return nil, err
+	}
+	return ParseChannels(strings.NewReader(out)), nil
+}
+
+// ParseChannels reads channel entries out of the extractor's output.
+//
+// Videos and channels arrive through the same command and are told apart by
+// the extractor naming which of its own readers produced each line, so a
+// result that is not a channel is dropped rather than rendered as one.
+func ParseChannels(r *strings.Reader) []media.Channel {
+	var channels []media.Channel
+
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64<<10), 4<<20)
+
+	for scanner.Scan() {
+		var e entry
+		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
+			continue
+		}
+		if e.Extractor != "YoutubeTab" || !media.IsChannelID(e.ID) {
+			continue
+		}
+
+		title := e.Title
+		if title == "" {
+			title = e.Channel
+		}
+		channels = append(channels, media.Channel{
+			ID:          e.ID,
+			Title:       media.Text(title),
+			Description: media.Text(e.Description),
+			Followers:   e.Followers,
+		})
+	}
+	return channels
 }
