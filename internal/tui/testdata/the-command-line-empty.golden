@@ -1,10 +1,24 @@
-:_
+[1mbivy · 3 new videos since your last visit                                       [0m
+[2m────────────────────────────────────────────────────────────────────────────────[0m
+[7m> • Video number 0                                                     Aye · now[0m
+  • Video number 1                                                  Aye · 1h ago
+  • Video number 2                                                  Aye · 2h ago
+    Video number 3                                                  Aye · 3h ago
+    Video number 4                                                  Aye · 4h ago
 
-  search words      find videos by words
-  follow channel    add a channel: @handle, a URL, an id, or a name on screen
-  unfollow channel  stop following one, by name or id
-  refresh           fetch the feeds again
-  help              what the keys and commands do
-  quit              leave
 
-  tab complete · enter run · esc cancel
+
+
+
+
+
+
+
+
+
+
+[2m────────────────────────────────────────────────────────────────────────────────[0m
+[2mnothing playing                                                                 [0m
+[2m  search <words>   follow <channel>   unfollow <channel>   refresh   help       [0m
+[2m  quit                                                                          [0m
+:█                                                                              

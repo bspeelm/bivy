@@ -44,84 +44,269 @@ type Dashboard struct {
 	// Now anchors the relative timestamps, passed in rather than read so the
 	// output is a function of its arguments.
 	Now time.Time
-	// Width is the terminal width to lay out for. Zero means the default.
-	Width int
-	// Height is how many rows the terminal has. Zero means show everything,
-	// which is what the non-interactive listing does.
+	// Width and Height are the terminal's, in cells. Zero means the defaults,
+	// and a zero Height also means nothing is pinned to the bottom — which is
+	// what a pipe wants.
+	Width  int
 	Height int
 	// Selected is the row under the cursor.
 	Selected int
-	// Status is a line shown under the list: what is playing, or what went
+	// Status is the line above the footer: what is playing, or what went
 	// wrong with the last thing that was asked for.
 	Status string
-	// Interactive draws the cursor and the key hints. Without it the same
-	// model renders as a plain listing, which is what a pipe gets.
-	Interactive bool
-	// Query is what is being searched for. Non-empty means the rows are
-	// results rather than the dashboard.
+	// Query is what was searched for. Non-empty means the rows are results
+	// rather than the dashboard.
 	Query string
 	// Line is what has been typed into the command line, and Typing means it
-	// has the keyboard — so the headline is a prompt and the rows underneath
-	// are not what anyone is looking at.
+	// has the keyboard.
 	Line   string
 	Typing bool
+	// Interactive draws the cursor, the frame and the key hints. Without it
+	// the same model renders as a plain listing, which is what a pipe gets.
+	Interactive bool
 }
 
 const (
-	defaultWidth = 80
-	minWidth     = 40
-	channelWidth = 20
-	agoWidth     = 7
+	defaultWidth  = 80
+	defaultHeight = 24
+	minWidth      = 40
 
-	// What the rows have to share the screen with: the headline, the blank
-	// line under it, and the footer.
-	chrome = 4
+	// The rows of the frame that are not list rows: the title, two rules, the
+	// status line and the footer.
+	chromeLines = 5
+)
+
+// Bold, faint and reverse, written out rather than taken from a library.
+// Three escape sequences are not worth the modules a styling package costs
+// (ADR-009), and this package already owns every byte it emits.
+const (
+	bold    = "\x1b[1m"
+	faint   = "\x1b[2m"
+	reverse = "\x1b[7m"
+	reset   = "\x1b[0m"
 )
 
 const (
-	keyHints    = "  ↑↓ move · enter play · / search · : commands · r refresh · :q quit"
-	searchHints = "  tab complete · enter run · esc cancel"
-	resultHints = "  ↑↓ move · enter play · / search again · : commands · esc back · :q quit"
-	emptyHints  = "  / search · : commands · r refresh · :q quit"
-	noResults   = "  / search again · : commands · esc back · :q quit"
+	keyHints    = "↑↓ move · enter play · / search · : commands · r refresh · :q quit"
+	resultHints = "↑↓ move · enter play · / search again · : commands · esc back · :q quit"
+	emptyHints  = "/ search · : commands · r refresh · :q quit"
+	noResults   = "/ search again · esc back · :q quit"
 )
 
-// completions lists what the line could still become, with a summary each.
+// styled wraps text in an attribute.
 //
-// A command line that does not show what it accepts is a guessing game, and
-// the list is the half of the bargain that makes ADR-011's rule bearable: the
-// commands are few enough to print.
-func completions(d Dashboard, width int) string {
-	matches := Matching(d.Line)
-	if len(matches) == 0 {
-		return "  nothing by that name\n"
+// Width is always measured on the text before this is applied: an escape
+// sequence occupies no cells, and counting it as though it did is how a
+// rendered row ends up shorter than the line it is supposed to fill.
+func styled(attr, text string) string {
+	if text == "" {
+		return ""
 	}
+	return attr + text + reset
+}
 
-	widest := 0
-	for _, c := range matches {
-		if n := len(c.Name) + len(c.Argument) + 1; n > widest {
-			widest = n
-		}
+// rule is the horizontal line above and below the list.
+func rule(width int) string { return strings.Repeat("─", width) }
+
+// fit makes a line exactly width cells: truncated with a mark where it is too
+// long, padded with spaces where it is too short.
+//
+// Padding matters as much as truncating. The selected row is drawn in reverse,
+// and a row that stops early is a highlight that stops early.
+func fit(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	s = pad(s, width)
+	if n := len([]rune(s)); n < width {
+		s += strings.Repeat(" ", width-n)
+	}
+	return s
+}
+
+// Render returns the screen as text, newline-terminated, ready to print.
+func Render(d Dashboard) string {
+	width, height := d.Width, d.Height
+	if width < minWidth {
+		width = defaultWidth
 	}
 
 	var b strings.Builder
-	for _, c := range matches {
-		spelling := c.Name
-		if c.Argument != "" {
-			spelling += " " + c.Argument
+	b.WriteString(styled(bold, fit("bivy · "+heading(d), width)))
+	b.WriteString("\n")
+	b.WriteString(styled(faint, rule(width)))
+	b.WriteString("\n")
+
+	visible := 0
+	if d.Interactive {
+		if height <= 0 {
+			height = defaultHeight
 		}
-		b.WriteString(pad(fmt.Sprintf("  %-*s  %s", widest, spelling, c.Summary), width))
+		visible = max(1, height-chrome(d, width))
+	}
+	b.WriteString(list(d, width, visible))
+
+	b.WriteString(styled(faint, rule(width)))
+	b.WriteString("\n")
+	b.WriteString(styled(faint, fit(status(d), width)))
+	b.WriteString("\n")
+
+	if d.Typing {
+		for _, line := range completions(d, width) {
+			b.WriteString(styled(faint, fit(line, width)))
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString(footer(d, width))
+	return b.String()
+}
+
+// chrome is how many rows the frame uses for something other than the list.
+func chrome(d Dashboard, width int) int {
+	n := chromeLines
+	if d.Typing {
+		n += len(completions(d, width))
+	}
+	return n
+}
+
+// heading is what this screen is, after the program's name.
+func heading(d Dashboard) string {
+	var fresh int
+	for _, r := range d.Rows {
+		// The same precedence the marker uses. A headline that counts a row
+		// the list does not mark is a headline nobody can reconcile.
+		if r.New && !r.Watched {
+			fresh++
+		}
+	}
+
+	switch {
+	case d.Query != "":
+		return fmt.Sprintf("search · %s for %q", plural(len(d.Rows), "result", "results"), d.Query)
+	case len(d.Rows) == 0:
+		return "nothing followed"
+	case fresh == 0:
+		return fmt.Sprintf("%s, nothing new", plural(len(d.Rows), "video", "videos"))
+	default:
+		return fmt.Sprintf("%s since your last visit", plural(fresh, "new video", "new videos"))
+	}
+}
+
+// list is the rows, padded to fill the space between the rules.
+func list(d Dashboard, width, visible int) string {
+	if len(d.Rows) == 0 {
+		return empty(d, width, visible)
+	}
+
+	first, last := window(d.Selected, len(d.Rows), visible)
+
+	var b strings.Builder
+	for i := first; i < last; i++ {
+		cursor := " "
+		if d.Interactive && i == d.Selected {
+			cursor = ">"
+		}
+		line := fit(cursor+" "+row(d, d.Rows[i], width-2), width)
+		if d.Interactive && i == d.Selected {
+			line = styled(reverse, line)
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	for range max(0, visible-(last-first)) {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// row is one line: what is being chosen on the left, what is known about it on
+// the right.
+func row(d Dashboard, r follow.Row, width int) string {
+	left := marker(r) + " " + r.Video.Title
+
+	right := r.Channel
+	if w := when(d.Now, r.Video); w != "" {
+		if right != "" {
+			right += " · "
+		}
+		right += w
+	}
+	return sides(left, right, width)
+}
+
+// sides puts one string at each end of a line.
+//
+// The left is what the row is; the right is what is known about it. The left
+// yields when there is not room for both, because a title cut short is still
+// the title and a channel name cut short is a different channel.
+func sides(left, right string, width int) string {
+	const gap = 2
+
+	room := width - len([]rune(right)) - gap
+	if room < 12 {
+		// Too narrow for both. The right yields entirely rather than eating
+		// the thing being chosen.
+		return pad(left, width)
+	}
+	left = pad(left, room)
+	spaces := width - len([]rune(left)) - len([]rune(right))
+	return left + strings.Repeat(" ", max(1, spaces)) + right
+}
+
+// empty is what fills the list when there are no rows.
+func empty(d Dashboard, width, visible int) string {
+	var say string
+	switch {
+	case d.Query != "":
+		say = "  nothing found for " + d.Query
+	case d.Interactive:
+		say = "  nothing followed yet — press / to search, or : for commands"
+	default:
+		// Piped somewhere. Telling a pipe which key to press is advice
+		// nobody in that position can take.
+		say = "  nothing followed yet — try: bivy follow @handle"
+	}
+
+	var b strings.Builder
+	b.WriteString(fit(say, width))
+	b.WriteString("\n")
+	for range max(0, visible-1) {
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// status is the line above the footer.
+func status(d Dashboard) string {
+	if d.Status != "" {
+		return d.Status
+	}
+	if len(d.Failed) > 0 && d.Query == "" {
+		return fmt.Sprintf("%s could not be reached: %s",
+			plural(len(d.Failed), "channel", "channels"), strings.Join(d.Failed, ", "))
+	}
+	return "nothing playing"
+}
+
+// footer is the last row: the command line when one is open, and the keys
+// otherwise.
+func footer(d Dashboard, width int) string {
+	if d.Typing {
+		// A block where the next character goes, which is what a terminal
+		// with its own cursor hidden has to draw for itself.
+		return fit(":"+d.Line+"█", width) + "\n"
+	}
+	if !d.Interactive {
+		return ""
+	}
+	return styled(faint, fit(hints(d), width)) + "\n"
 }
 
 // hints names only the keys that would do something. The hint line is the one
 // part of the screen a new user reads as instructions.
 func hints(d Dashboard) string {
 	switch {
-	case d.Typing:
-		return searchHints
 	case len(d.Rows) == 0 && d.Query != "":
 		return noResults
 	case len(d.Rows) == 0:
@@ -133,121 +318,63 @@ func hints(d Dashboard) string {
 	}
 }
 
-// Render returns the dashboard as text, newline-terminated, ready to print.
-func Render(d Dashboard) string {
-	var b strings.Builder
-
-	width := d.Width
-	if width < minWidth {
-		width = defaultWidth
+// completions lists what the line could still become, with a summary each.
+//
+// A command line that does not show what it accepts is a guessing game, and
+// the list is the half of the bargain that makes ADR-011's rule bearable: the
+// commands are few enough to print.
+func completions(d Dashboard, width int) []string {
+	matches := Matching(d.Line)
+	switch len(matches) {
+	case 0:
+		return []string{"  no command starts with that"}
+	case 1:
+		return []string{"  " + spelled(matches[0]) + "   " + matches[0].Summary}
 	}
 
-	var newCount int
-	for _, r := range d.Rows {
-		// The same precedence the marker uses. A headline that counts a row
-		// the list does not mark is a headline nobody can reconcile.
-		if r.New && !r.Watched {
-			newCount++
+	var rows []string
+	row := "  "
+	for _, c := range matches {
+		name := spelled(c)
+		if len([]rune(row))+len([]rune(name))+3 > width && row != "  " {
+			rows = append(rows, strings.TrimRight(row, " "))
+			row = "  "
 		}
+		row += name + "   "
 	}
-
-	b.WriteString(pad(headline(d, newCount), width))
-	b.WriteString("\n\n")
-
-	if d.Typing {
-		b.WriteString(completions(d, width))
-		b.WriteString(footer(d, width, 0, 0))
-		return b.String()
-	}
-
-	if len(d.Rows) == 0 && len(d.Failed) == 0 {
-		if d.Query != "" {
-			fmt.Fprintf(&b, "  Nothing found for %s\n", pad(d.Query, width-20))
-			b.WriteString(footer(d, width, 0, 0))
-			return b.String()
-		}
-		b.WriteString("  Nothing to show. Follow a channel:\n\n")
-		b.WriteString("      bivy follow @handle\n")
-		b.WriteString(footer(d, width, 0, 0))
-		return b.String()
-	}
-
-	chanWidth, titleWidth := columns(width)
-	first, last := window(d.Selected, len(d.Rows), d.Height)
-
-	for i := first; i < last; i++ {
-		r := d.Rows[i]
-
-		cursor := " "
-		if d.Interactive && i == d.Selected {
-			cursor = ">"
-		}
-		if chanWidth == 0 {
-			fmt.Fprintf(&b, "%s%s %-*s %s\n",
-				cursor, marker(r), agoWidth, when(d.Now, r.Video),
-				pad(r.Video.Title, titleWidth))
-			continue
-		}
-		fmt.Fprintf(&b, "%s%s %-*s %-*s %s\n",
-			cursor, marker(r),
-			agoWidth, when(d.Now, r.Video),
-			chanWidth, pad(r.Channel, chanWidth),
-			pad(r.Video.Title, titleWidth),
-		)
-	}
-
-	b.WriteString(footer(d, width, first, last))
-	return b.String()
+	return append(rows, strings.TrimRight(row, " "))
 }
 
-// columns divides the space the fixed parts leave. The channel column yields
-// first and then disappears: the title is the thing being chosen between, and
-// a channel name that has eaten it has made the dashboard useless in order to
-// stay tidy.
-func columns(width int) (channel, title int) {
-	// One space, the three-cell marker, a space, the age, a space, then the
-	// channel and title columns with a space between them.
-	const fixed = 1 + 3 + 1 + agoWidth + 1
-
-	available := width - fixed - 1
-	channel = channelWidth
-	if scaled := available / 3; scaled < channel {
-		channel = scaled
+// spelled is a command as the completion list writes it, with what follows it
+// where there is something. A list of bare words says nothing about which of
+// them need typing after.
+func spelled(c Command) string {
+	if c.Argument == "" {
+		return c.Name
 	}
-	title = available - channel
-
-	// Below this the channel column is too narrow to name anything, so the
-	// row gives the space to the title instead.
-	if channel < 6 || title < 8 {
-		return 0, width - fixed
-	}
-	return channel, title
+	return c.Name + " <" + c.Argument + ">"
 }
 
-// marker is the three cells before the age. Watched outranks new, and there is
-// no colour in it: the one thing a dashboard must survive is being read on a
-// terminal that has none.
+// marker is the cell before the title. Watched outranks new, and there is no
+// colour in it: the one thing a list must survive is being read on a terminal
+// that has none.
 func marker(r follow.Row) string {
 	switch {
 	case r.Watched:
-		return " ✓ "
+		return "✓"
 	case r.New:
-		return " • "
+		return "•"
 	default:
-		return "   "
+		return " "
 	}
 }
 
 // window is the slice of rows that fits, kept around the cursor. The list
 // moves under the cursor rather than jumping by a page: a row that was next to
 // the cursor before a keypress should be next to it after one.
-func window(selected, rows, height int) (first, last int) {
-	visible := height - chrome
-	if height <= 0 || visible >= rows {
+func window(selected, rows, visible int) (first, last int) {
+	if visible <= 0 || visible >= rows {
 		return 0, rows
-	}
-	if visible < 1 {
-		visible = 1
 	}
 
 	first = selected - visible/2
@@ -260,57 +387,6 @@ func window(selected, rows, height int) (first, last int) {
 	return first, first + visible
 }
 
-func footer(d Dashboard, width, first, last int) string {
-	var lines []string
-	// Only when a window is actually being shown. Typing draws no rows at
-	// all, and "showing 1-0 of 5" is arithmetic rather than information.
-	if last > first && (first > 0 || last < len(d.Rows)) {
-		lines = append(lines, fmt.Sprintf("  showing %d-%d of %d", first+1, last, len(d.Rows)))
-	}
-	if len(d.Failed) > 0 {
-		lines = append(lines, "  "+fmt.Sprintf("%s could not be reached: %s",
-			plural(len(d.Failed), "channel", "channels"),
-			strings.Join(d.Failed, ", ")))
-	}
-	if d.Status != "" {
-		lines = append(lines, "  "+d.Status)
-	}
-	if d.Interactive {
-		lines = append(lines, hints(d))
-	}
-	if len(lines) == 0 {
-		return ""
-	}
-
-	var b strings.Builder
-	b.WriteString("\n")
-	for _, line := range lines {
-		b.WriteString(pad(line, width))
-		b.WriteString("\n")
-	}
-	return b.String()
-}
-
-func headline(d Dashboard, fresh int) string {
-	switch {
-	case d.Typing:
-		return ":" + d.Line + "_"
-	case d.Query != "":
-		return fmt.Sprintf("bivy · %s for %s", plural(len(d.Rows), "result", "results"), d.Query)
-	case len(d.Rows) == 0:
-		return "bivy"
-	case fresh == 0:
-		return fmt.Sprintf("bivy · %s, nothing new since your last visit",
-			plural(len(d.Rows), "video", "videos"))
-	default:
-		return fmt.Sprintf("bivy · %s since your last visit", plural(fresh, "new video", "new videos"))
-	}
-}
-
-// when is the second column. A feed entry carries a publish time and no
-// duration, a search result the reverse, and the column shows whichever is
-// known — a search result with no date would otherwise read as fifty years
-// old.
 func when(now time.Time, v media.Video) string {
 	if !v.Published.IsZero() {
 		return Ago(now, v.Published)

@@ -27,30 +27,25 @@ bivy list               the channels you follow
 bivy list-only          the dashboard printed once, without the cursor
 ```
 
-`bivy` on its own is the dashboard. Newest first, one line each, a dot against
-anything posted since you last looked, and a tick against anything you have
-watched:
+`bivy` on its own is the dashboard. The title says what you are looking at,
+the row under the cursor is highlighted, and the keys are always on the last
+line:
 
 ```
 bivy · 2 new videos since your last visit
+────────────────────────────────────────────────────────────────────
+  • The newest thing that happened                       Aye · 2h ago
+> • The one under the cursor                             Bee · 1d ago
+  ✓ One that has been watched                            Aye · 5d ago
 
-  •  2h ago  Aye                  The newest thing that happened
-> •  1d ago  Bee                  Something from yesterday
-  ✓  5d ago  Aye                  One you have already watched
-
-  ↑↓ move · enter play · r refresh · q quit
+────────────────────────────────────────────────────────────────────
+nothing playing
+↑↓ move · enter play · / search · : commands · r refresh · :q quit
 ```
 
-Enter plays the row under the cursor in mpv's own window and leaves you on the
-dashboard, so you can keep browsing. One mpv serves the whole session, and it
-puts no window up until there is something to show.
-
-The window is mpv's, so mpv's keys work in it — `q` closes it, `space` pauses,
-`f` is fullscreen. Worth knowing if your desktop gives it no title bar: on
-Wayland, mpv draws its own decorations through libdecor, and a build without
-that on a compositor offering none server-side has no close button to click. A video
-is marked watched when it reaches its end, not when it starts — closing it
-after ten seconds does not count as having watched it.
+A dot marks anything posted since you last looked and a tick anything you have
+watched. What is being chosen sits on the left; what is known about it is
+right-aligned, so the titles line up whatever the channel names are.
 
 A channel that cannot be reached is named under the list rather than quietly
 left out, and its entries stay new until they have actually been shown. Run
