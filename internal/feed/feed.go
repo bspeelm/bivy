@@ -1,0 +1,162 @@
+// Package feed fetches what channels publish.
+//
+// It is the only package in bivy that imports net/http, and PLAN.md §0 holds
+// it to that with a command. Everything bivy says on the wire is written here,
+// which makes the claim in §9 checkable by reading one directory.
+package feed
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/bspeelm/bivy/internal/media"
+)
+
+const (
+	// A channel feed is a few kilobytes. Generous, and still bounded, which
+	// an unbounded read from a hostile server is not (ADR-001).
+	maxFeedBytes = 1 << 20
+
+	// A channel page is HTML meant for a browser and is genuinely large.
+	maxPageBytes = 8 << 20
+
+	// bivy identifies the program, never the person. There is no version of
+	// this string that varies per install, per machine, or per run.
+	userAgent = "bivy (+https://github.com/bspeelm/bivy)"
+)
+
+// Client fetches feeds. The zero value is not usable; call New.
+type Client struct {
+	http *http.Client
+
+	// Where requests go. Fields rather than constants so the tests can point
+	// them at a local server without a seam in the production path.
+	FeedBase string
+	PageBase string
+}
+
+// New returns a Client with the timeouts bivy is willing to wait.
+func New() *Client {
+	return &Client{
+		http: &http.Client{
+			Timeout: 20 * time.Second,
+			// Redirects are followed, but not indefinitely, and never off the
+			// scheme they started on.
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 5 {
+					return errors.New("too many redirects")
+				}
+				if req.URL.Scheme != "https" {
+					return fmt.Errorf("refusing a redirect to %s", req.URL.Scheme)
+				}
+				return nil
+			},
+		},
+		FeedBase: "https://www.youtube.com/feeds/videos.xml",
+		PageBase: "https://www.youtube.com",
+	}
+}
+
+// Fetch returns what a channel's feed currently carries. This runs at launch,
+// once per followed channel, and carries no credential, no cookie and no
+// parameter that identifies anyone — only the channel asked about (ADR-003).
+func (c *Client) Fetch(ctx context.Context, channelID string) (media.Channel, error) {
+	if !media.IsChannelID(channelID) {
+		return media.Channel{}, fmt.Errorf("%q is not a channel identifier", channelID)
+	}
+
+	body, err := c.get(ctx, c.FeedBase+"?channel_id="+url.QueryEscape(channelID), maxFeedBytes)
+	if err != nil {
+		return media.Channel{}, err
+	}
+	ch, err := Parse(strings.NewReader(body))
+	if err != nil {
+		return media.Channel{}, fmt.Errorf("channel %s: %w", channelID, err)
+	}
+
+	// The feed states which channel it is. Believing the request over the
+	// response keeps a redirected or substituted feed from filing its entries
+	// under a channel the user follows.
+	ch.ID = channelID
+	for i := range ch.Videos {
+		ch.Videos[i].ChannelID = channelID
+	}
+	return ch, nil
+}
+
+// channelIDIn finds a channel identifier in a page, in the order the markers
+// are worth trusting. The page's own link to its feed comes first because it
+// is the exact thing bivy is trying to learn; the others appear earlier in the
+// document and belong to whichever channels the page happens to recommend.
+var channelIDIn = []*regexp.Regexp{
+	regexp.MustCompile(`channel_id=(UC[A-Za-z0-9_-]{22})`),
+	regexp.MustCompile(`"channelId":"(UC[A-Za-z0-9_-]{22})"`),
+	regexp.MustCompile(`/channel/(UC[A-Za-z0-9_-]{22})`),
+}
+
+var handleShape = regexp.MustCompile(`^@[A-Za-z0-9._-]{1,60}$`)
+
+// Resolve turns a handle into the channel identifier its feed is keyed by.
+//
+// The one request bivy makes for a page meant for a browser, which is why
+// ADR-008 exists. It happens when a channel is followed and never at launch,
+// and a failure is not fatal: the caller is told to pass an identifier.
+func (c *Client) Resolve(ctx context.Context, handle string) (string, error) {
+	if !handleShape.MatchString(handle) {
+		return "", fmt.Errorf("%q is not a handle", handle)
+	}
+
+	body, err := c.get(ctx, c.PageBase+"/"+url.PathEscape(handle), maxPageBytes)
+	if err != nil {
+		return "", err
+	}
+	for _, re := range channelIDIn {
+		if m := re.FindStringSubmatch(body); m != nil {
+			return m[1], nil
+		}
+	}
+	return "", fmt.Errorf("no channel identifier on the page for %s", handle)
+}
+
+// get performs the request and reads at most limit bytes of the response. The
+// body length is chosen by the server, and io.ReadAll on a remote response is
+// an invitation phrased as convenience (ADR-001).
+func (c *Client) get(ctx context.Context, target string, limit int64) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	// Compression is left to the transport, which asks for gzip and unwraps
+	// the reply. Setting the header here turns that off and hands back the
+	// compressed bytes, silently: the response is a valid 200 that nothing
+	// downstream can read.
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("%s: %s", target, resp.Status)
+	}
+
+	// One byte past the limit, so hitting it is distinguishable from a body
+	// that happens to be exactly that long.
+	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return "", err
+	}
+	if int64(len(b)) > limit {
+		return "", fmt.Errorf("%s: response exceeds %d bytes", target, limit)
+	}
+	return string(b), nil
+}
