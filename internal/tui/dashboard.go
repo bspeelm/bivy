@@ -61,9 +61,10 @@ type Dashboard struct {
 	Status string
 	// Query is what was searched for. Non-empty means the rows are results
 	// rather than the dashboard, and Channels means those results are
-	// channels.
+	// channels. Viewing names the channel whose videos are on screen.
 	Query    string
 	Channels bool
+	Viewing  string
 	// Line is what has been typed into the command line, and Typing means it
 	// has the keyboard.
 	Line   string
@@ -99,7 +100,8 @@ const (
 const (
 	keyHints     = "↑↓ move · enter play · / search · : commands · r refresh · :q quit"
 	resultHints  = "↑↓ move · enter play · f follow · / search again · esc back · :q quit"
-	channelHints = "↑↓ move · f follow · / search · esc back · :q quit"
+	channelHints = "↑↓ move · enter open · f follow · / search · esc back · :q quit"
+	viewingHints = "↑↓ move · enter play · f follow · esc back · :q quit"
 	emptyHints   = "/ search · : commands · r refresh · :q quit"
 	noResults    = "/ search again · esc back · :q quit"
 )
@@ -228,6 +230,8 @@ func heading(d Dashboard) string {
 	}
 
 	switch {
+	case d.Viewing != "":
+		return fmt.Sprintf("%s · %s", d.Viewing, plural(len(d.Rows), "video", "videos"))
 	case d.Query != "" && d.Channels:
 		return fmt.Sprintf("channels · %s for %q", plural(len(d.Rows), "channel", "channels"), d.Query)
 	case d.Query != "":
@@ -413,6 +417,8 @@ func hints(d Dashboard) string {
 		return noResults
 	case len(d.Rows) == 0:
 		return emptyHints
+	case d.Viewing != "":
+		return viewingHints
 	case d.Channels:
 		return channelHints
 	case d.Query != "":

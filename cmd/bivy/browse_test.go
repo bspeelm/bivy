@@ -1464,3 +1464,160 @@ func TestFallbackRowsAreNotMarkedNew(t *testing.T) {
 
 	}
 }
+
+// Visiting a channel: find it, press enter, and its videos are the list.
+func TestEnterOnAChannelOpensIt(t *testing.T) {
+	b := newBrowser(t)
+	b.finder.channels = []media.Channel{{ID: chanA, Title: "Aye", Followers: 10}}
+
+	br := b.start(t)
+	b.eventually(t, "nothing followed yet")
+	b.screen.press(key(':'))
+	b.screen.typed("channels aye")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "1 channel for")
+
+	// Enter on a channel row opens it; enter on a video row plays it.
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "Aye · 2 videos")
+	b.eventually(t, "The newest thing")
+	b.quit(t)
+
+	if br.viewing == "" {
+		t.Error("the browser is not showing a channel")
+	}
+}
+
+// Escape goes back one screen, however many deep the screens are.
+func TestEscapeGoesBackOneScreenAtATime(t *testing.T) {
+	b := newBrowser(t)
+	b.finder.channels = []media.Channel{{ID: chanA, Title: "Aye", Followers: 10}}
+	b.run(t, "follow", chanB)
+
+	b.start(t)
+	b.eventually(t, "From the other one")
+
+	b.screen.press(key(':'))
+	b.screen.typed("channels aye")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "1 channel for")
+
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "Aye · 2 videos")
+
+	// Back to the channel list, then back to the dashboard.
+	b.screen.press(named(term.KeyEscape))
+	b.eventually(t, "1 channel for")
+	b.screen.press(named(term.KeyEscape))
+	b.eventually(t, "From the other one")
+	b.quit(t)
+}
+
+// Enter on a video inside a channel plays it, the same as anywhere else.
+func TestEnterInsideAChannelPlays(t *testing.T) {
+	b := newBrowser(t)
+	b.finder.channels = []media.Channel{{ID: chanA, Title: "Aye", Followers: 10}}
+
+	b.start(t)
+	b.eventually(t, "nothing followed yet")
+	b.screen.press(key(':'))
+	b.screen.typed("ch aye")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "1 channel for")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "Aye · 2 videos")
+
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "playing ·")
+	b.quit(t)
+
+	if got := len(b.player.watched()); got != 1 {
+		t.Errorf("%d videos played from inside a channel, want 1", got)
+	}
+}
+
+// :open takes a name on screen, so a channel on the dashboard can be opened
+// without finding it again.
+func TestOpenCommandByNameOnScreen(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	br := b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(key(':'))
+	b.screen.typed("open Aye")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "Aye · 2 videos")
+	b.quit(t)
+
+	if br.viewing != "Aye" {
+		t.Errorf("viewing %q, want Aye", br.viewing)
+	}
+}
+
+// A channel that will not open leaves the screen it was opened from, rather
+// than an empty one.
+func TestAChannelThatWillNotOpenLeavesTheScreenAlone(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+	b.feeds.fail(errors.New("404 Not Found"))
+	b.finder.uploads = nil
+
+	b.start(t)
+	b.eventually(t, "could not be reached")
+
+	b.screen.press(key(':'))
+	b.screen.typed("open Aye")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "could not open Aye")
+	b.quit(t)
+}
+
+// The channel is the screen, so repeating it on every row is noise.
+func TestRowsInsideAChannelDoNotRepeatTheChannel(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	br := b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(key(':'))
+	b.screen.typed("open Aye")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "Aye · 2 videos")
+	b.quit(t)
+
+	for _, r := range br.rows {
+		if r.Channel != "" {
+			t.Errorf("a row inside a channel still names it: %q", r.Channel)
+		}
+		if r.ChannelID != chanA {
+			t.Errorf("a row inside a channel lost which channel it is from")
+		}
+	}
+}
+
+// A channel already followed can be opened by name whatever the screen is
+// showing, including a list it does not appear in.
+func TestOpenAFollowedChannelNotOnScreen(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	br := b.start(t)
+	b.eventually(t, "The newest thing")
+
+	// A search replaces the list with rows from somebody else entirely.
+	b.screen.press(key('/'))
+	b.screen.typed("unrelated")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "A Search Result")
+
+	b.screen.press(key(':'))
+	b.screen.typed("open Aye")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "Aye · 2 videos")
+	b.quit(t)
+
+	if br.viewing != "Aye" {
+		t.Errorf("viewing %q, want Aye", br.viewing)
+	}
+}
