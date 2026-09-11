@@ -73,8 +73,17 @@ func TestRealMPVIsCleanedUpAfterwards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	began := time.Now()
 	if err := p.Close(); err != nil {
 		t.Fatal(err)
+	}
+
+	// Real mpv takes the quit and goes. Reaching the kill timeout means it was
+	// never asked — and a killed mpv can outlive the thing that killed it,
+	// which is a window left on someone's desktop.
+	if took := time.Since(began); took >= quitWait {
+		t.Errorf("Close took %s, which is the kill timeout rather than a clean exit", took)
 	}
 
 	entries, err := os.ReadDir(runtime)

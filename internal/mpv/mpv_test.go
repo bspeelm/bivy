@@ -21,7 +21,13 @@ import (
 //
 // The stand-in is this test binary, re-executed. That needs no build step and
 // no fixture binary checked in, and it is the pattern os/exec's own tests use.
-const standInEnv = "BIVY_MPV_STAND_IN"
+const (
+	standInEnv = "BIVY_MPV_STAND_IN"
+	// Where the stand-in records that it was asked to quit. A file, because
+	// the evidence has to cross a process boundary — and the absence of it is
+	// what a killed mpv looks like.
+	quitMarkerEnv = "BIVY_MPV_QUIT_MARKER"
+)
 
 func standIn(t *testing.T, behaviour string) Options {
 	t.Helper()
@@ -105,6 +111,9 @@ func TestStandInProcess(t *testing.T) {
 			// conversation.
 			_, _ = conn.Write([]byte("this is not json\n"))
 		case name == "quit":
+			if marker := os.Getenv(quitMarkerEnv); marker != "" {
+				_ = os.WriteFile(marker, []byte("asked"), 0o600)
+			}
 			_ = encoder.Encode(map[string]any{"error": "success", "request_id": req.RequestID})
 			return
 		default:
@@ -262,6 +271,39 @@ func TestCloseRemovesTheSocketDirectory(t *testing.T) {
 	}
 	if len(after) != 0 {
 		t.Errorf("Close left %d entries behind", len(after))
+	}
+}
+
+// mpv is asked to quit rather than killed, so it tears down its window and
+// releases the audio device the way it means to.
+//
+// This test exists because Close marked the player closed before sending the
+// quit, and commands are refused after that — so the command was never sent
+// and every exit was a three-second stall followed by a kill. The stand-in
+// exits when its connection closes, which hid it: only asking the stand-in
+// what it was actually told shows the difference.
+func TestClosingAsksMPVToQuitRatherThanKillingIt(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "quit-received")
+
+	opt := standIn(t, "idle")
+	opt.Env = append(opt.Env, quitMarkerEnv+"="+marker)
+
+	p, err := Start(context.Background(), opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	began := time.Now()
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Error("mpv was never asked to quit; it was killed")
+	}
+	// A quit that is never sent shows up as the full kill timeout.
+	if took := time.Since(began); took >= quitWait {
+		t.Errorf("Close took %s, which is the kill timeout, not a clean exit", took)
 	}
 }
 

@@ -34,6 +34,7 @@ const Minimum = "0.29.0"
 const (
 	dirPerm   fs.FileMode = 0o700
 	startWait             = 10 * time.Second
+	quitWait              = 3 * time.Second
 )
 
 // Event is something mpv reported.
@@ -250,16 +251,17 @@ func (p *Player) Events() <-chan Event { return p.events }
 func (p *Player) Close() error {
 	var err error
 	p.closeOnce.Do(func() {
+		// Asked to quit before the player is marked closed, because commands
+		// are refused after that and this one would never be sent. Sent
+		// without waiting for a reply: mpv is entitled to exit rather than
+		// answer, and waiting for an answer that is not coming turns every
+		// quit into a timeout.
+		_ = p.send("quit")
 		close(p.closed)
-
-		// Asked to quit rather than killed, so it tears down its window and
-		// releases the audio device the way it means to.
-		_, _ = p.command("quit")
-		_ = p.conn.Close()
 
 		select {
 		case <-p.exited:
-		case <-time.After(3 * time.Second):
+		case <-time.After(quitWait):
 			// It was asked politely and did not go. §7 says quitting bivy
 			// stops mpv, and an unattended window nobody asked for is worse
 			// than an abrupt exit.
@@ -267,6 +269,7 @@ func (p *Player) Close() error {
 			<-p.exited
 		}
 
+		_ = p.conn.Close()
 		err = os.RemoveAll(p.dir)
 	})
 	return err
@@ -292,12 +295,8 @@ func (p *Player) command(args ...any) (json.RawMessage, error) {
 		p.mu.Unlock()
 	}()
 
-	line, err := json.Marshal(request{Command: args, RequestID: id})
-	if err != nil {
+	if err := p.write(id, args); err != nil {
 		return nil, err
-	}
-	if _, err := p.conn.Write(append(line, '\n')); err != nil {
-		return nil, fmt.Errorf("talking to mpv: %w", err)
 	}
 
 	select {
@@ -311,6 +310,26 @@ func (p *Player) command(args ...any) (json.RawMessage, error) {
 	case <-time.After(startWait):
 		return nil, fmt.Errorf("mpv did not answer %v", args[0])
 	}
+}
+
+// send writes a command and does not wait for the reply.
+func (p *Player) send(args ...any) error {
+	p.mu.Lock()
+	p.nextID++
+	id := p.nextID
+	p.mu.Unlock()
+	return p.write(id, args)
+}
+
+func (p *Player) write(id int, args []any) error {
+	line, err := json.Marshal(request{Command: args, RequestID: id})
+	if err != nil {
+		return err
+	}
+	if _, err := p.conn.Write(append(line, '\n')); err != nil {
+		return fmt.Errorf("talking to mpv: %w", err)
+	}
+	return nil
 }
 
 func (p *Player) read() {
