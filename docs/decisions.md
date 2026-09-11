@@ -540,3 +540,56 @@ makes the staleness argument theirs to answer rather than a promise this
 project cannot keep. For signing, somewhere to hold a key that is not the same
 account that publishes the archive — signing with a credential stored beside
 the artefact proves only that the credential was there.
+
+---
+
+## ADR-015 — The extractor is not exercised in CI, and no credential is added to make it possible
+
+**Status:** accepted. A consequence of ADR-004, recorded because the obvious
+fix for a red run is the thing ADR-004 refuses.
+
+### What prompted it
+
+The integration tests were scheduled onto hosted runners. Everything that does
+not resolve a stream passed on both platforms. Asking the extractor for one
+produced this:
+
+    ERROR: [youtube] Sign in to confirm you're not a bot. Use --cookies-from-browser
+    or --cookies for the authentication.
+
+From inside mpv the same failure reads `end-file error unrecognized file
+format` — mpv reporting that it was handed a web page rather than a stream.
+The two are indistinguishable in a player log, which is why the extractor is
+now asked directly and separately.
+
+### The decision
+
+The extractor path is not tested in CI. Playback and stream resolution are
+verified by hand on a workstation, and each release's review packet says so
+rather than letting a green run imply otherwise.
+
+### The argument against
+
+It leaves the most user-visible path in the program — pressing enter and
+getting a video — outside automated testing, on a project whose whole claim is
+that its promises are checkable. The feed path, the socket, the flag set and
+the process hygiene are all covered on both platforms; the one thing anybody
+actually does with bivy is not.
+
+### What survives it
+
+The refusal, which is the point. The remedy the error offers is a cookie, and
+bivy holding a cookie is the end of ADR-004 — not weakened at the edges but
+finished, since a credential in CI is a credential in a repository. A test
+suite that requires an account to pass is a different program.
+
+The honest alternative is the one taken: say the gap exists, in the workflow
+that would otherwise appear to cover it and in the packet of every release.
+
+A test asserts that no workflow passes a cookie to the extractor. The failure
+this guards against is not a decision anyone would announce; it is a tired
+afternoon and a red run that has been red for a week.
+
+**What would reopen this:** a runner on an address the service does not
+challenge, which is a property of where CI runs rather than of what bivy does.
+Nothing about the program has to change for this to become possible again.
