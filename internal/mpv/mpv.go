@@ -35,6 +35,11 @@ const (
 	dirPerm   fs.FileMode = 0o700
 	startWait             = 10 * time.Second
 	quitWait              = 3 * time.Second
+
+	// sun_path is 108 bytes on Linux and 104 on macOS, and the limit belongs
+	// to that struct rather than to the filesystem. A Mac's temporary
+	// directory is already fifty characters before bivy adds anything.
+	maxSocketPath = 100
 )
 
 // Event is something mpv reported.
@@ -126,6 +131,13 @@ func Start(ctx context.Context, opt Options) (*Player, error) {
 		return nil, err
 	}
 	socket := filepath.Join(dir, "mpv.sock")
+	if len(socket) > maxSocketPath {
+		_ = os.RemoveAll(dir)
+		// Checked rather than left to bind: the symptom is mpv exiting with
+		// nothing to say, and the cause is nowhere near it.
+		return nil, fmt.Errorf("the socket path %s is %d bytes and a unix socket may not exceed %d; set XDG_RUNTIME_DIR somewhere shorter",
+			socket, len(socket), maxSocketPath)
+	}
 
 	args := append(append([]string(nil), opt.Args...), flags(socket)...)
 	cmd := exec.CommandContext(ctx, binary, args...)

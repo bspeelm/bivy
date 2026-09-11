@@ -3,10 +3,8 @@
 // Pure functions over data: nothing here reads a file, makes a request or
 // looks at a clock. This is where a program like this accumulates its
 // strangest bugs — "why is that marked new", "why did the list reorder" — and
-// pure code is where those are cheapest to pin down.
-//
-// State values are immutable. The functions that change one return a new
-// value, so a caller cannot half-apply a change and then fail.
+// pure code is where those are cheapest to pin down. State values are
+// immutable, so a caller cannot half-apply a change and then fail.
 package follow
 
 import (
