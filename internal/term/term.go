@@ -40,6 +40,7 @@ const (
 	KeyEnter
 	KeyBackspace
 	KeyEscape
+	KeyTab
 	KeyInterrupt
 )
 
@@ -240,6 +241,8 @@ func DecodeKey(b []byte) (Press, int) {
 		return Press{Key: KeyEnter}, 1
 	case 0x7f, 0x08:
 		return Press{Key: KeyBackspace}, 1
+	case '\t':
+		return Press{Key: KeyTab}, 1
 	case 0x03, 0x04: // ctrl-c, ctrl-d
 		return Press{Key: KeyInterrupt}, 1
 	}

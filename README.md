@@ -61,6 +61,28 @@ puts the dashboard back without fetching every feed again. The second column
 shows how long ago something was posted, or how long it runs — whichever the
 source actually knows.
 
+`:` opens a command line. Tab completes, and the list under it shows
+everything there is:
+
+```
+:_
+
+  search words      find videos by words
+  follow channel    add a channel: @handle, a URL, an id, or a name on screen
+  unfollow channel  stop following one, by name or id
+  refresh           fetch the feeds again
+  help              what the keys and commands do
+  quit              leave
+```
+
+`/` is the same line with `search ` already in it. The point of the rest is
+`follow`: after a search, the channel is a column you are reading, so
+`:follow Papa Meat` follows the channel those results came from without
+leaving the screen.
+
+A command exists because it takes an argument or because it is rare; anything
+else is a key. That rule is ADR-011 and it is what keeps the list short.
+
 ## Still to come
 
 | | |

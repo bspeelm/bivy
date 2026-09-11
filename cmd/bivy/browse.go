@@ -65,9 +65,10 @@ type browser struct {
 	// be attributed to something. mpv reports that a file ended, not which.
 	playing media.Video
 
-	// query is what was searched for, empty on the dashboard. typing means
-	// the search box has the keyboard.
+	// query is what was searched for, empty on the dashboard. line is what has
+	// been typed into the command line, and typing means it has the keyboard.
 	query  string
+	line   string
 	typing bool
 	// dashboard keeps the rows the search replaced, so escape can put them
 	// back without fetching every feed again.
@@ -191,7 +192,11 @@ func (b *browser) handleRune(ctx context.Context, r rune) (done bool) {
 	case ' ':
 		b.play(ctx)
 	case '/':
-		b.typing, b.query, b.status = true, "", ""
+		// The one command common enough to deserve a key, opened with its
+		// name already in the line so the same surface handles both.
+		b.typing, b.line, b.status = true, "search ", ""
+	case ':':
+		b.typing, b.line, b.status = true, "", ""
 	case 'r':
 		if b.query != "" {
 			// Refreshing a result set means asking the same question again,
@@ -199,41 +204,177 @@ func (b *browser) handleRune(ctx context.Context, r rune) (done bool) {
 			b.runSearch(ctx, b.query)
 			return false
 		}
-		b.status = "refreshing…"
-		_ = b.draw()
-		if err := b.load(ctx); err != nil {
-			b.status = err.Error()
-		}
+		b.refresh(ctx)
 	}
 	return false
 }
 
-// handleTyping is the search box, where every printable character is a
+// handleTyping is the command line, where every printable character is a
 // character — including the ones that are commands on the list behind it.
 func (b *browser) handleTyping(ctx context.Context, press term.Press) (done bool) {
 	switch press.Key {
 	case term.KeyInterrupt:
 		return true
 	case term.KeyEscape:
-		b.typing = false
-		b.query = ""
+		b.typing, b.line = false, ""
+	case term.KeyTab:
+		b.line = tui.Complete(b.line)
 	case term.KeyBackspace:
-		if r := []rune(b.query); len(r) > 0 {
-			b.query = string(r[:len(r)-1])
+		if r := []rune(b.line); len(r) > 0 {
+			b.line = string(r[:len(r)-1])
 		}
 	case term.KeyEnter:
 		b.typing = false
-		if strings.TrimSpace(b.query) == "" {
-			b.leaveResults()
+		intent, err := tui.Parse(b.line)
+		b.line = ""
+		if err != nil {
+			b.status = err.Error()
 			return false
 		}
-		b.runSearch(ctx, b.query)
+		return b.act(ctx, intent)
 	case term.KeyRune:
-		if len(b.query) < queryLimit {
-			b.query += string(press.Rune)
+		if len(b.line) < queryLimit {
+			b.line += string(press.Rune)
 		}
 	}
 	return false
+}
+
+// act carries out what the command line asked for.
+//
+// The parsing is in internal/tui and the doing is here, which is what keeps
+// that package renderable in a test: it decides what was meant, and never how
+// to bring it about.
+func (b *browser) act(ctx context.Context, intent tui.Intent) (done bool) {
+	switch v := intent.(type) {
+	case nil:
+		return false
+	case tui.Quit:
+		return true
+	case tui.ShowHelp:
+		b.status = "keys: ↑↓ move · enter play · / search · : commands · esc back · q quit"
+	case tui.Refresh:
+		b.refresh(ctx)
+	case tui.Search:
+		b.runSearch(ctx, v.Query)
+	case tui.Follow:
+		b.follow(ctx, v.Target)
+	case tui.Unfollow:
+		b.unfollow(v.Target)
+	}
+	return false
+}
+
+// targetIn works out which channel a command means.
+//
+// It accepts everything the command line does — a handle, a URL, an
+// identifier — and also a channel name that is on screen. After a search the
+// channel is a column the user is reading and its identifier is not, so
+// "follow Papa Meat" has to mean the rows in front of them.
+func targetIn(rows []follow.Row, want string) (id, handle string, err error) {
+	if id, handle, err = target(want); err == nil {
+		return id, handle, nil
+	}
+	for _, r := range rows {
+		if strings.EqualFold(r.Channel, want) && media.IsChannelID(r.Video.ChannelID) {
+			return r.Video.ChannelID, "", nil
+		}
+	}
+	return "", "", fmt.Errorf("no channel called %q here", want)
+}
+
+// follow adds a channel from inside the browser.
+//
+// The target may be a name on screen rather than an identifier, because after
+// a search the channel is a column the user is looking at and its identifier
+// is not.
+func (b *browser) follow(ctx context.Context, target string) {
+	id, handle, err := targetIn(b.rows, target)
+	if err != nil {
+		b.status = err.Error()
+		return
+	}
+
+	b.status = "following…"
+	_ = b.draw()
+
+	if id == "" {
+		if id, err = b.app.feeds.Resolve(ctx, handle); err != nil {
+			b.status = fmt.Sprintf("could not work out which channel %s is", handle)
+			return
+		}
+	}
+
+	ch, err := b.app.feeds.Fetch(ctx, id)
+	if err != nil {
+		b.status = "could not reach that channel: " + err.Error()
+		return
+	}
+
+	next, err := b.state.Add(follow.Channel{ID: id, Title: ch.Title}, b.app.now())
+	if errors.Is(err, follow.ErrAlreadyFollowed) {
+		b.status = "already following " + name(ch.Title, id)
+		return
+	}
+	if err != nil {
+		b.status = err.Error()
+		return
+	}
+	if err := b.app.store.WriteJSON(stateFile, next); err != nil {
+		b.status = err.Error()
+		return
+	}
+
+	b.state = next
+	b.status = "following " + name(ch.Title, id)
+	b.reload(ctx)
+}
+
+func (b *browser) unfollow(target string) {
+	id, _, err := targetIn(b.rows, target)
+	if err != nil || id == "" {
+		if id = byTitle(b.state, target); id == "" {
+			b.status = "not following " + target
+			return
+		}
+	}
+
+	channel, _ := b.state.Find(id)
+	next, removed := b.state.Remove(id)
+	if !removed {
+		b.status = "not following " + target
+		return
+	}
+	if err := b.app.store.WriteJSON(stateFile, next); err != nil {
+		b.status = err.Error()
+		return
+	}
+
+	b.state = next
+	b.status = "unfollowed " + name(channel.Title, id)
+	b.rows = follow.Dashboard(b.state, b.fetched, dashboardRows)
+	b.selected = tui.Move(b.selected, 0, len(b.rows))
+}
+
+// refresh fetches the followed feeds again.
+func (b *browser) refresh(ctx context.Context) {
+	b.status = "refreshing…"
+	_ = b.draw()
+	if err := b.load(ctx); err != nil {
+		b.status = err.Error()
+	}
+}
+
+// reload rebuilds the dashboard from what is already fetched, plus whatever a
+// newly followed channel brings, without asking for every feed again.
+func (b *browser) reload(ctx context.Context) {
+	fetched, failed := b.app.fetchAll(ctx, b.state)
+	if len(fetched) > 0 {
+		b.fetched, b.failed = fetched, failed
+	}
+	b.query, b.dashboard = "", nil
+	b.rows = follow.Dashboard(b.state, b.fetched, dashboardRows)
+	b.selected = tui.Move(b.selected, 0, len(b.rows))
 }
 
 // runSearch replaces the rows with results, keeping the dashboard to come back
@@ -381,6 +522,7 @@ func (b *browser) draw() error {
 		Selected:    b.selected,
 		Status:      b.status,
 		Query:       b.query,
+		Line:        b.line,
 		Typing:      b.typing,
 		Interactive: true,
 	}))

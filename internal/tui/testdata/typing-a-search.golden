@@ -1,4 +1,5 @@
-search: terminal video_
+:search terminal video_
 
+  search words  find videos by words
 
-  enter search · esc cancel
+  tab complete · enter run · esc cancel
