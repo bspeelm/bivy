@@ -189,6 +189,10 @@ func (b *browser) report(e mpv.Event) {
 		return
 	}
 
+	if e.Failed() {
+		b.status = playbackTrouble(e)
+		return
+	}
 	if !e.Finished() {
 		b.status = ""
 		return
@@ -239,6 +243,19 @@ func (b *browser) draw() error {
 		Status:      b.status,
 		Interactive: true,
 	}))
+}
+
+// playbackTrouble explains a video that would not play.
+//
+// The failure that actually happens is the extractor being refused a stream —
+// bivy holds no account and sends no cookie (ADR-004), and that is exactly the
+// request a bot check declines. Saying nothing, which is what bivy did before
+// this existed, looks like the keypress was ignored.
+func playbackTrouble(e mpv.Event) string {
+	if e.Detail == "" {
+		return "could not play that — mpv could not open it"
+	}
+	return "could not play that — " + e.Detail
 }
 
 // startMPV is the real player. The only place in bivy that launches one.

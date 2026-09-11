@@ -40,9 +40,16 @@ const (
 type Event struct {
 	Name string
 	// Reason is set on end-file: "eof" when the video played to its end,
-	// and something else when it was stopped, skipped or quit.
+	// "error" when it could not be played, and something else when it was
+	// stopped, skipped or quit.
 	Reason string
+	// Detail is what mpv said went wrong, on an end-file that failed.
+	Detail string
 }
+
+// Failed reports that playback ended because it could not happen, rather than
+// because it finished or was stopped.
+func (e Event) Failed() bool { return e.Name == "end-file" && e.Reason == "error" }
 
 // Finished reports that this event is a video reaching its own end, rather
 // than being stopped. It is the difference between watched and closed.
@@ -96,6 +103,7 @@ type reply struct {
 	RequestID int             `json:"request_id"`
 	Event     string          `json:"event"`
 	Reason    string          `json:"reason"`
+	FileError string          `json:"file_error"`
 }
 
 // Start launches mpv and connects to it. The socket lives in a 0700 directory
@@ -322,7 +330,7 @@ func (p *Player) read() {
 
 		if r.Event != "" {
 			select {
-			case p.events <- Event{Name: r.Event, Reason: r.Reason}:
+			case p.events <- Event{Name: r.Event, Reason: r.Reason, Detail: r.FileError}:
 			default:
 			}
 			continue

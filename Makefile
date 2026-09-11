@@ -16,12 +16,13 @@ LDFLAGS := -s -w -X main.Version=$(VERSION)
 # checkout sits is a property of a machine and not of this project.
 STANDARD_CHECK ?= ../agent-context/check.sh
 
-.PHONY: help lint vet test race budgets standard check build install
+.PHONY: help lint vet test race budgets standard check build install integration
 
 help:
 	@echo "make check       lint, vet, race tests, budgets, standard - the gate"
 	@echo "make test        go test"
 	@echo "make race        go test -race"
+	@echo "make integration go test -tags=integration - needs mpv installed"
 	@echo "make budgets     the PLAN.md §0 budgets"
 	@echo "make standard    conformance against the development standard, if present"
 	@echo "make build       build bivy for this machine"
@@ -32,6 +33,10 @@ lint:
 
 vet:
 	go vet ./...
+	# The integration tests are behind a build tag, so the line above never
+	# compiles them. Vetting them needs no mpv and catches a change to a
+	# signature they use.
+	go vet -tags=integration ./...
 
 test:
 	go test ./...
@@ -41,6 +46,12 @@ test:
 # race in that mix shows up as a rendering artifact nobody can reproduce.
 race:
 	go test -race ./...
+
+# Drives a real mpv. Not in `check`: the suite must not require mpv to be
+# installed, because a test that asks whether something is present passes
+# where it was written and fails where the artifact is built.
+integration:
+	go test -tags=integration ./...
 
 budgets:
 	@sh scripts/budgets.sh

@@ -366,6 +366,48 @@ func TestAPlayerThatDiesIsNotReusedAfterwards(t *testing.T) {
 	}
 }
 
+// Saying nothing, which is what bivy did before this test existed, looks like
+// the keypress was ignored. The failure that actually happens is the extractor
+// being refused a stream: bivy holds no account and sends no cookie (ADR-004),
+// which is exactly the request a bot check declines.
+func TestAVideoThatWouldNotPlaySaysSo(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	br := b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(term.KeyEnter)
+	b.eventually(t, "playing ·")
+
+	b.player.events <- mpv.Event{
+		Name:   "end-file",
+		Reason: "error",
+		Detail: "Failed to open https://www.youtube.com/watch?v=aaaaaaaaaaa.",
+	}
+	b.eventually(t, "could not play that")
+	b.eventually(t, "Failed to open")
+	b.quit(t)
+
+	if br.state.HasWatched("aaaaaaaaaaa") {
+		t.Error("a video that failed to play was recorded as watched")
+	}
+}
+
+// mpv does not always say why.
+func TestAFailureWithNoDetailStillSaysSomething(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(term.KeyEnter)
+	b.eventually(t, "playing ·")
+
+	b.player.events <- mpv.Event{Name: "end-file", Reason: "error"}
+	b.eventually(t, "could not play that")
+	b.quit(t)
+}
+
 func TestTheCursorStopsAtTheEnds(t *testing.T) {
 	b := newBrowser(t)
 	b.run(t, "follow", chanA)
