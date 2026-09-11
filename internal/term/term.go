@@ -59,8 +59,14 @@ const (
 	hideCursor     = "\x1b[?25l"
 	showCursor     = "\x1b[?25h"
 	cursorHome     = "\x1b[H"
-	clearLine      = "\x1b[K"
-	clearBelow     = "\x1b[J"
+	// Writing into the last column of a line with auto-wrap on moves the
+	// cursor to the next row, and the character that did it lands somewhere
+	// nobody meant. Every frame here fills its width exactly, so the last
+	// column is written on every row.
+	noAutoWrap = "\x1b[?7l"
+	autoWrap   = "\x1b[?7h"
+	clearLine  = "\x1b[K"
+	clearBelow = "\x1b[J"
 )
 
 // Terminal is a terminal in raw mode, on the alternate screen.
@@ -100,7 +106,7 @@ func Open(in, out *os.File) (*Terminal, error) {
 		closed:  make(chan struct{}),
 	}
 
-	if _, err := io.WriteString(out, enterAltScreen+hideCursor); err != nil {
+	if _, err := io.WriteString(out, enterAltScreen+hideCursor+noAutoWrap); err != nil {
 		_ = t.Close()
 		return nil, err
 	}
@@ -129,7 +135,7 @@ func (t *Terminal) Close() error {
 		close(t.closed)
 	}
 
-	_, _ = io.WriteString(t.out, showCursor+leaveAltScreen)
+	_, _ = io.WriteString(t.out, autoWrap+showCursor+leaveAltScreen)
 	if t.state == nil {
 		return nil
 	}

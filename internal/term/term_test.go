@@ -166,6 +166,7 @@ func TestTheEscapeSequencesArePaired(t *testing.T) {
 	for _, pair := range [][2]string{
 		{enterAltScreen, leaveAltScreen},
 		{hideCursor, showCursor},
+		{noAutoWrap, autoWrap},
 	} {
 		if pair[0] == pair[1] {
 			t.Errorf("%q is its own inverse, which it is not", pair[0])
@@ -173,5 +174,18 @@ func TestTheEscapeSequencesArePaired(t *testing.T) {
 		if !strings.HasPrefix(pair[0], "\x1b[") || !strings.HasPrefix(pair[1], "\x1b[") {
 			t.Errorf("%q and %q are not both control sequences", pair[0], pair[1])
 		}
+	}
+}
+
+// Every frame fills its width exactly, so the last column is written on every
+// row — and writing there with auto-wrap on moves the cursor to the next line,
+// putting the character that did it somewhere nobody meant. The symptom is a
+// right-hand column missing its last character.
+func TestAutoWrapIsTurnedOffAndBackOn(t *testing.T) {
+	if !strings.Contains(noAutoWrap, "?7l") {
+		t.Errorf("noAutoWrap = %q, which does not turn auto-wrap off", noAutoWrap)
+	}
+	if !strings.Contains(autoWrap, "?7h") {
+		t.Errorf("autoWrap = %q, which does not turn it back on", autoWrap)
 	}
 }

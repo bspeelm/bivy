@@ -657,3 +657,47 @@ func TestWhenNoFeedAnswersItSaysSoOnce(t *testing.T) {
 		t.Errorf("a single followed channel failing should name it: %q", only)
 	}
 }
+
+// A small picture in the corner of a tall screen reads as something that
+// failed to fill the space. In the middle of its pane it reads as a pane.
+func TestThePictureSitsInTheMiddleOfItsPane(t *testing.T) {
+	d := Dashboard{
+		Rows: manyRows(40), Now: now, Width: 100, Height: 40,
+		Interactive: true, Art: "<PIC>",
+	}
+
+	var at = -1
+	var row int
+	for _, line := range strings.Split(Render(d), "\n") {
+		if strings.Contains(line, "Video number") {
+			if strings.Contains(line, "<PIC>") {
+				at = row
+			}
+			row++
+		}
+	}
+	if at < 0 {
+		t.Fatal("the picture was not drawn on any row")
+	}
+	if at == 0 {
+		t.Error("the picture is at the top of the pane rather than the middle of it")
+	}
+
+	_, artRows := ArtBox(100, 40)
+	if want := (row - artRows) / 2; at != want {
+		t.Errorf("the picture starts at row %d of %d, want %d", at, row, want)
+	}
+}
+
+// A pane taller than the list has nowhere to centre into, and starts at the
+// top rather than above the rule.
+func TestAPictureTallerThanTheListStartsAtTheTop(t *testing.T) {
+	d := Dashboard{
+		Rows: manyRows(3), Now: now, Width: 160, Height: 24,
+		Interactive: true, Art: "<PIC>",
+	}
+	first := strings.Split(Render(d), "\n")[2]
+	if !strings.Contains(first, "<PIC>") {
+		t.Errorf("a picture taller than the list did not start on the first row:\n%q", first)
+	}
+}

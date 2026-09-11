@@ -65,6 +65,10 @@ type Dashboard struct {
 	Query    string
 	Channels bool
 	Viewing  string
+	// Busy means the thing on screen is still arriving. Said in the heading,
+	// because "0 results" and "not finished looking" are different answers
+	// and the second one reads as the first.
+	Busy bool
 	// Line is what has been typed into the command line, and Typing means it
 	// has the keyboard.
 	Line   string
@@ -99,9 +103,9 @@ const (
 
 const (
 	keyHints     = "↑↓ move · enter play · / search · : commands · r refresh · :q quit"
-	resultHints  = "↑↓ move · enter play · f follow · / search again · esc back · :q quit"
-	channelHints = "↑↓ move · enter open · f follow · / search · esc back · :q quit"
-	viewingHints = "↑↓ move · enter play · f follow · esc back · :q quit"
+	resultHints  = "↑↓ move · enter play · f follow · m more · esc back · :q quit"
+	channelHints = "↑↓ move · enter open · f follow · m more · esc back · :q quit"
+	viewingHints = "↑↓ move · enter play · f follow · m more · esc back · :q quit"
 	emptyHints   = "/ search · : commands · r refresh · :q quit"
 	noResults    = "/ search again · esc back · :q quit"
 )
@@ -191,7 +195,7 @@ func ArtBox(width, height int) (cols, rows int) {
 		return 0, 0
 	}
 
-	cols = width / 4
+	cols = width / 3
 	cols = min(max(cols, minArtCols), maxArtCols)
 	rows = cols * 9 / 16 / 2
 
@@ -203,7 +207,7 @@ func ArtBox(width, height int) (cols, rows int) {
 
 const (
 	minArtCols = 16
-	maxArtCols = 34
+	maxArtCols = 48
 	// minList is how much has to be left for the titles beside the picture.
 	minList = 30
 	// minHeight is the shortest window a picture is worth drawing in.
@@ -230,6 +234,12 @@ func heading(d Dashboard) string {
 	}
 
 	switch {
+	case d.Busy && d.Query != "":
+		return fmt.Sprintf("searching for %q…", d.Query)
+	case d.Busy && d.Viewing != "":
+		return "opening " + d.Viewing + "…"
+	case d.Busy:
+		return "fetching…"
 	case d.Viewing != "":
 		return fmt.Sprintf("%s · %s", d.Viewing, plural(len(d.Rows), "video", "videos"))
 	case d.Query != "" && d.Channels:
@@ -261,10 +271,15 @@ func list(d Dashboard, width, visible int) string {
 
 	first, last := window(d.Selected, len(d.Rows), visible)
 
+	// The picture sits in the middle of the pane rather than at the top of it.
+	// A small picture in the corner of a tall screen reads as something that
+	// failed to fill the space; in the middle it reads as a pane.
+	artAt := max(0, (min(visible, last-first)-artRows)/2)
+
 	var b strings.Builder
 	for i := first; i < last; i++ {
 		var line string
-		if artCols > 0 && i-first == 0 {
+		if artCols > 0 && i-first == artAt {
 			// Placed where the cursor already is, without moving it.
 			line = d.Art
 		}
