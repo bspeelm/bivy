@@ -131,7 +131,10 @@ func TestRealMPVPlaysAVideoToItsEnd(t *testing.T) {
 			if !open {
 				t.Fatal("mpv went away mid-playback")
 			}
-			t.Logf("event: %s %s", e.Name, e.Reason)
+			// The detail, not just the reason: this test is the one that
+			// runs where nobody is watching, and "reason was error" on a
+			// machine nobody can attach to is a failure with nothing in it.
+			t.Logf("event: %s %s %s", e.Name, e.Reason, e.Detail)
 
 			if e.Name == "start-file" {
 				started = true
@@ -143,7 +146,8 @@ func TestRealMPVPlaysAVideoToItsEnd(t *testing.T) {
 				t.Error("the file ended without ever starting")
 			}
 			if !e.Finished() {
-				t.Errorf("end-file reason was %q; bivy reads that as not watched", e.Reason)
+				t.Errorf("end-file reason was %q, and mpv said %q; bivy reads that as not watched",
+					e.Reason, e.Detail)
 			}
 			return
 
