@@ -289,6 +289,12 @@ func TestTheReproducibleBuildPinsItsCompiler(t *testing.T) {
 	if !strings.Contains(dist, "go.mod") {
 		t.Error("scripts/dist.sh pins a compiler version that go.mod does not name")
 	}
+	// Go stamps a binary with what git says, and git says different things
+	// about checkouts holding identical source. The README tells a rebuilder
+	// their checkout does not matter, and this is what makes that true.
+	if !strings.Contains(dist, "-buildvcs=false") {
+		t.Error("scripts/dist.sh lets Go stamp the VCS into the binary, so the same source in a clone and in a worktree build differently")
+	}
 
 	dir := filepath.Join(".github", "workflows")
 	entries, err := os.ReadDir(dir)

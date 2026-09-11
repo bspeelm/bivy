@@ -5,7 +5,8 @@
 #
 # The same build flags as `make build` and as the binary budget, so what is
 # measured, what is tested and what is downloaded are one artefact rather than
-# three that resemble each other.
+# three that resemble each other — with one addition, -buildvcs=false, whose
+# reason is at the build itself.
 
 set -eu
 cd "$(dirname "$0")/.."
@@ -33,6 +34,14 @@ export GOTOOLCHAIN
 # "this is the copy I happened to upload". tar records mtimes, owners and
 # directory order, and gzip records a timestamp of its own; none of those are
 # properties of the release.
+#
+# -buildvcs=false is part of the same answer. Go otherwise stamps the binary
+# with what git says, and git says different things about checkouts that hold
+# identical source: a clone at the tag reports the tag, a linked worktree
+# reports (devel), and a tree with one file touched reports itself modified.
+# A rebuilder comparing checksums would read that as a tampered archive, which
+# is a false alarm on exactly the check this is here to support. The version is
+# stamped explicitly through -X, so nothing is lost that anyone reads.
 #
 # GNU tar only. Elsewhere the archive is still correct, just not byte-stable,
 # and this says so rather than failing: the reproducibility claim is gated in
@@ -63,7 +72,7 @@ while read -r platform; do
 	mkdir -p "$stage"
 
 	GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
-		go build -mod=readonly -trimpath \
+		go build -mod=readonly -trimpath -buildvcs=false \
 		-ldflags "-s -w -X main.Version=$VERSION" \
 		-o "$stage/bivy" ./cmd/bivy
 

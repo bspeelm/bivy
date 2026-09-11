@@ -141,11 +141,12 @@ that the build is reproducible — `make dist` on a clean checkout of the tag
 produces the published archives byte for byte, so you can rebuild and compare
 instead of trusting the upload (ADR-014).
 
-Two conditions, both of which that command handles or Go enforces: it pins the
-compiler to the version named in `go.mod`, because two Go releases turn the
-same source into different binaries; and the checkout has to be clean, because
-Go stamps the commit it built from — and whether the tree was modified — into
-the binary itself.
+That command handles the one condition that would otherwise trip you up: it
+pins the compiler to the version named in `go.mod`, because two Go releases
+turn the same source into different binaries. Nothing else about your checkout
+matters — a clone, a worktree, or a tree with a file touched all produce the
+same archives, because a release build records nothing about the git it was
+built from.
 
 Or build it, which needs Go and nothing else:
 
