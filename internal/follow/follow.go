@@ -149,12 +149,25 @@ type Row struct {
 	// Channel is the followed channel's title, which is the name the user
 	// chose to see, not whatever a given entry claims its author is.
 	Channel string
+	// ChannelID is the channel this row is, or the one it came from: what the
+	// follow key acts on, whichever kind of row it is.
+	ChannelID string
 	// New reports that this was published since the last visit.
 	New bool
 	// Watched reports that it was played to its end. It outranks New on
 	// screen: something already watched is not news, whenever it arrived.
 	Watched bool
+
+	// Followers and Summary are what a channel search knows. They are unset
+	// on a video row.
+	Followers int
+	Summary   string
+	// Followed is set on a channel row that is already on the follow list.
+	Followed bool
 }
+
+// IsChannel reports that this row is a channel rather than a video.
+func (r Row) IsChannel() bool { return r.Video.ID == "" && r.ChannelID != "" }
 
 // Dashboard is what to show on launch: what the followed channels' feeds
 // currently carry, newest first, with anything published since that channel's
@@ -176,10 +189,11 @@ func Dashboard(s State, fetched []media.Channel, limit int) []Row {
 		for _, v := range ch.Videos {
 			watched := s.HasWatched(v.ID)
 			rows = append(rows, Row{
-				Video:   v,
-				Channel: name,
-				New:     !watched && v.Published.After(followed.LastVisit),
-				Watched: watched,
+				Video:     v,
+				Channel:   name,
+				ChannelID: ch.ID,
+				New:       !watched && v.Published.After(followed.LastVisit),
+				Watched:   watched,
 			})
 		}
 	}
@@ -206,9 +220,31 @@ func Results(s State, videos []media.Video) []Row {
 	rows := make([]Row, 0, len(videos))
 	for _, v := range videos {
 		rows = append(rows, Row{
-			Video:   v,
-			Channel: v.Author,
-			Watched: s.HasWatched(v.ID),
+			Video:     v,
+			Channel:   v.Author,
+			ChannelID: v.ChannelID,
+			Watched:   s.HasWatched(v.ID),
+		})
+	}
+	return rows
+}
+
+// ChannelResults turns a channel search into rows. One already followed is
+// marked: the list is for deciding which to follow, and "you have this one" is
+// the first thing worth knowing.
+func ChannelResults(s State, channels []media.Channel) []Row {
+	rows := make([]Row, 0, len(channels))
+	for _, c := range channels {
+		if !media.IsChannelID(c.ID) {
+			continue
+		}
+		_, followed := s.Find(c.ID)
+		rows = append(rows, Row{
+			Channel:   c.Title,
+			ChannelID: c.ID,
+			Followers: c.Followers,
+			Summary:   c.Description,
+			Followed:  followed,
 		})
 	}
 	return rows

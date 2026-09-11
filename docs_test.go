@@ -16,9 +16,21 @@ import (
 	"testing"
 )
 
-// Every `make <target>` the documentation mentions, in prose or in a fenced
-// block.
-var documentedTarget = regexp.MustCompile(`make ([a-z][a-z-]*)`)
+// Every `make <target>` the documentation mentions.
+//
+// Inside code, and at the start of a line there: a command is typed at a
+// prompt. "I make cartoons on my main account" is a line of example output
+// that happens to sit in a fenced block, and a parser that cannot tell those
+// apart reports the README as documenting a target nobody wrote.
+var documentedTarget = regexp.MustCompile("(?m)^\\s*make ([a-z][a-z-]*)")
+
+var code = regexp.MustCompile("(?s)```.*?```|`[^`\n]+`")
+
+// inCode is every fenced block and backticked span in a document, which is
+// where a command can be written down.
+func inCode(text string) string {
+	return strings.Join(code.FindAllString(text, -1), "\n")
+}
 
 // A Makefile rule: a target at the start of a line, followed by its
 // prerequisites.
@@ -46,7 +58,7 @@ func TestEveryDocumentedMakeTargetExists(t *testing.T) {
 	targets := makefileTargets(t)
 
 	var checked int
-	for _, m := range documentedTarget.FindAllStringSubmatch(read(t, "README.md"), -1) {
+	for _, m := range documentedTarget.FindAllStringSubmatch(inCode(read(t, "README.md")), -1) {
 		checked++
 		if _, found := targets[m[1]]; !found {
 			t.Errorf("README.md documents `make %s`, which the Makefile does not define", m[1])

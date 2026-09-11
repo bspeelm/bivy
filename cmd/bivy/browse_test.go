@@ -136,10 +136,11 @@ func (p *fakePlayer) wasClosed() bool {
 // stubSearch stands in for the extractor, which a test may not require to be
 // installed.
 type stubSearch struct {
-	mu      sync.Mutex
-	results []media.Video
-	err     error
-	asked   []string
+	mu       sync.Mutex
+	results  []media.Video
+	channels []media.Channel
+	err      error
+	asked    []string
 }
 
 func (s *stubSearch) Search(_ context.Context, query string, _ int) ([]media.Video, error) {
@@ -150,6 +151,16 @@ func (s *stubSearch) Search(_ context.Context, query string, _ int) ([]media.Vid
 		return nil, s.err
 	}
 	return s.results, nil
+}
+
+func (s *stubSearch) Channels(_ context.Context, query string, _ int) ([]media.Channel, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.asked = append(s.asked, "channels:"+query)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.channels, nil
 }
 
 func (s *stubSearch) queries() []string {
@@ -181,10 +192,16 @@ func newBrowser(t *testing.T) *browserHarness {
 		harness: h,
 		screen:  newScreen(),
 		player:  newPlayer(),
-		finder: &stubSearch{results: []media.Video{
-			{ID: "sssssssssss", Title: "A Search Result", Author: "Someone", Duration: 89 * time.Second},
-			{ID: "ttttttttttt", Title: "Another Result", Author: "Someone Else", Duration: 3 * time.Minute},
-		}},
+		finder: &stubSearch{
+			results: []media.Video{
+				{ID: "sssssssssss", Title: "A Search Result", Author: "Someone", Duration: 89 * time.Second},
+				{ID: "ttttttttttt", Title: "Another Result", Author: "Someone Else", Duration: 3 * time.Minute},
+			},
+			channels: []media.Channel{
+				{ID: chanA, Title: "Aye", Description: "the first one", Followers: 3_590_000},
+				{ID: chanB, Title: "Bee", Description: "the other one", Followers: 12_400},
+			},
+		},
 		done: make(chan int, 1),
 	}
 	h.app.newPlayer = func(context.Context) (player, error) { return bh.player, nil }
@@ -995,5 +1012,181 @@ func TestFollowingSomethingThatIsNotHere(t *testing.T) {
 
 	if asked := b.feeds.asked(); len(asked) != 0 {
 		t.Errorf("a name that resolved to nothing still reached the network: %v", asked)
+	}
+}
+
+// The ask: search for a channel, then press f next to it to follow it.
+func TestChannelSearchThenFollowWithF(t *testing.T) {
+	b := newBrowser(t)
+
+	br := b.start(t)
+	b.eventually(t, "nothing followed yet")
+
+	b.screen.press(key(':'))
+	b.screen.typed("channels papa meat")
+	b.screen.press(named(term.KeyEnter))
+
+	b.eventually(t, "2 channels for")
+	b.eventually(t, "Aye")
+	b.eventually(t, "3.6M subscribers")
+	// The channel's own description, for the row under the cursor.
+	b.eventually(t, "the first one")
+
+	// f on the second row follows that one, not the first.
+	b.screen.press(named(term.KeyDown), key('f'))
+	b.eventually(t, "following Bee")
+	b.quit(t)
+
+	if _, found := br.state.Find(chanB); !found {
+		t.Error("f did not follow the channel under the cursor")
+	}
+	if _, found := br.state.Find(chanA); found {
+		t.Error("f followed the wrong row")
+	}
+}
+
+// Following one channel out of a list is rarely the last thing anyone does
+// with that list, so the list stays and the row is marked.
+func TestFollowingFromAChannelListKeepsTheList(t *testing.T) {
+	b := newBrowser(t)
+
+	br := b.start(t)
+	b.eventually(t, "nothing followed yet")
+	b.screen.press(key(':'))
+	b.screen.typed("ch papa meat")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "2 channels for")
+
+	b.screen.press(key('f'))
+	b.eventually(t, "following Aye")
+	b.eventually(t, "✓")
+	b.quit(t)
+
+	if !br.channels {
+		t.Error("following a channel threw the channel list away")
+	}
+}
+
+// f on a video row follows the channel that video came from, which is the
+// other half of the same question.
+func TestFollowWithFFromAVideoRow(t *testing.T) {
+	b := newBrowser(t)
+	b.finder.results = []media.Video{
+		{ID: "sssssssssss", Title: "A Search Result", Author: "Aye", ChannelID: chanA},
+	}
+
+	br := b.start(t)
+	b.eventually(t, "nothing followed yet")
+	b.screen.press(key('/'))
+	b.screen.typed("something")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "A Search Result")
+
+	b.screen.press(key('f'))
+	b.eventually(t, "following Aye")
+	b.quit(t)
+
+	if _, found := br.state.Find(chanA); !found {
+		t.Error("f on a video row did not follow its channel")
+	}
+}
+
+// A channel already followed is marked when the list is built, not only after
+// following one from it.
+func TestAChannelAlreadyFollowedIsMarkedInTheList(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(key(':'))
+	b.screen.typed("channels papa meat")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "2 channels for")
+	b.eventually(t, "✓")
+	b.quit(t)
+}
+
+// f with nothing under the cursor is not a crash.
+func TestFollowWithFOnAnEmptyList(t *testing.T) {
+	b := newBrowser(t)
+
+	b.start(t)
+	b.eventually(t, "nothing followed yet")
+	b.screen.press(key('f'))
+	b.quit(t)
+
+	if asked := b.feeds.asked(); len(asked) != 0 {
+		t.Errorf("f on an empty list reached the network: %v", asked)
+	}
+}
+
+// A row on screen has been named by whatever produced it, so following it asks
+// no feed. Asking anyway would put every follow behind an endpoint that
+// intermittently refuses, for a name bivy is already holding.
+func TestFollowingARowOnScreenAsksNoFeed(t *testing.T) {
+	b := newBrowser(t)
+	b.finder.channels = []media.Channel{{ID: chanA, Title: "Aye", Followers: 10}}
+
+	br := b.start(t)
+	b.eventually(t, "nothing followed yet")
+	b.screen.press(key(':'))
+	b.screen.typed("channels whatever")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "1 channel for")
+
+	before := len(b.feeds.asked())
+	b.screen.press(key('f'))
+	b.eventually(t, "following Aye")
+	b.quit(t)
+
+	if after := len(b.feeds.asked()); after != before {
+		t.Errorf("following a named row made %d feed requests", after-before)
+	}
+	if _, found := br.state.Find(chanA); !found {
+		t.Error("the channel was not followed")
+	}
+}
+
+// And it still works when the feed is refusing, which is the case that made
+// this worth doing.
+func TestFollowingARowWorksWhileFeedsAreDown(t *testing.T) {
+	b := newBrowser(t)
+	b.finder.channels = []media.Channel{{ID: chanA, Title: "Aye", Followers: 10}}
+	b.feeds.fail(errors.New("404 Not Found"))
+
+	br := b.start(t)
+	b.eventually(t, "nothing followed yet")
+	b.screen.press(key(':'))
+	b.screen.typed("channels whatever")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "1 channel for")
+
+	b.screen.press(key('f'))
+	b.eventually(t, "following Aye")
+	b.quit(t)
+
+	if _, found := br.state.Find(chanA); !found {
+		t.Error("a channel could not be followed while its feed was down")
+	}
+}
+
+// A handle has no name attached until something resolves it, so that path
+// still asks.
+func TestFollowingAHandleStillAsksTheFeed(t *testing.T) {
+	b := newBrowser(t)
+
+	b.start(t)
+	b.eventually(t, "nothing followed yet")
+	before := len(b.feeds.asked())
+
+	b.screen.press(key(':'))
+	b.screen.typed("follow @aye")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "following Aye")
+	b.quit(t)
+
+	if after := len(b.feeds.asked()); after == before {
+		t.Error("following a handle made no request, so the name came from nowhere")
 	}
 }

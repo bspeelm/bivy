@@ -98,6 +98,7 @@ Once bivy is open, most of it is keys rather than commands:
     ↑↓ or j k               move
     enter                   play the row in mpv
     /                       search
+    f                       follow the channel this row came from
     esc                     back to the dashboard
     r                       refresh
     :q                      quit

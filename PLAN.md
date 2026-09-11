@@ -175,7 +175,7 @@ quietly is how this stops being testable, so each names what disagrees with it.
 | `internal/term` | raw mode, the alternate screen, key decoding, redraw. The interactive half of the tui split (ADR-009) |
 | `internal/config` | TOML configuration |
 | `internal/feed` | fetch and parse per-channel XML feeds. **Sole `net/http` importer.** |
-| `internal/ytdlp` | subprocess only: resolve a search query |
+| `internal/ytdlp` | subprocess only: resolve a search query, for videos or channels |
 | `internal/mpv` | launch and drive mpv over an IPC socket |
 | `internal/follow` | follows and watch state, pure |
 | `internal/store` | atomic `0600` persistence |

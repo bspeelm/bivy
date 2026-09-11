@@ -43,6 +43,7 @@ type screen interface {
 // loop is testable without one installed.
 type searcher interface {
 	Search(ctx context.Context, query string, limit int) ([]media.Video, error)
+	Channels(ctx context.Context, query string, limit int) ([]media.Channel, error)
 }
 
 // browser is one interactive session: a list, a cursor, and at most one mpv.
@@ -65,11 +66,13 @@ type browser struct {
 	// be attributed to something. mpv reports that a file ended, not which.
 	playing media.Video
 
-	// query is what was searched for, empty on the dashboard. line is what has
-	// been typed into the command line, and typing means it has the keyboard.
-	query  string
-	line   string
-	typing bool
+	// query is what was searched for, empty on the dashboard; channels means
+	// those results are channels. line is what has been typed into the
+	// command line, and typing means it has the keyboard.
+	query    string
+	channels bool
+	line     string
+	typing   bool
 	// dashboard keeps the rows the search replaced, so escape can put them
 	// back without fetching every feed again.
 	dashboard []follow.Row
@@ -195,6 +198,8 @@ func (b *browser) handleRune(ctx context.Context, r rune) (done bool) {
 		b.selected = tui.Move(b.selected, len(b.rows), len(b.rows))
 	case ' ':
 		b.play(ctx)
+	case 'f':
+		b.followRow(ctx)
 	case '/':
 		// The one command common enough to deserve a key, opened with its
 		// name already in the line so the same surface handles both.
@@ -261,6 +266,8 @@ func (b *browser) act(ctx context.Context, intent tui.Intent) (done bool) {
 		b.refresh(ctx)
 	case tui.Search:
 		b.runSearch(ctx, v.Query)
+	case tui.Channels:
+		b.runChannelSearch(ctx, v.Query)
 	case tui.Follow:
 		b.follow(ctx, v.Target)
 	case tui.Unfollow:
@@ -269,12 +276,9 @@ func (b *browser) act(ctx context.Context, intent tui.Intent) (done bool) {
 	return false
 }
 
-// targetIn works out which channel a command means.
-//
-// It accepts everything the command line does — a handle, a URL, an
-// identifier — and also a channel name that is on screen. After a search the
-// channel is a column the user is reading and its identifier is not, so
-// "follow Papa Meat" has to mean the rows in front of them.
+// targetIn works out which channel a command means: everything the command
+// line does — a handle, a URL, an identifier — and also a channel name that is
+// on screen, because after a search that is what the user is reading.
 func targetIn(rows []follow.Row, want string) (id, handle string, err error) {
 	if id, handle, err = target(want); err == nil {
 		return id, handle, nil
@@ -309,15 +313,28 @@ func (b *browser) follow(ctx context.Context, target string) {
 		}
 	}
 
+	// A row already on screen has been named by the thing that produced it, so
+	// there is nothing left to ask a feed. Asking anyway puts every follow
+	// behind an endpoint that intermittently refuses, for a name bivy is
+	// holding.
+	if title := titleIn(b.rows, id); title != "" {
+		b.add(ctx, id, title)
+		return
+	}
+
 	ch, err := b.app.feeds.Fetch(ctx, id)
 	if err != nil {
 		b.status = "could not reach that channel: " + err.Error()
 		return
 	}
+	b.add(ctx, id, ch.Title)
+}
 
-	next, err := b.state.Add(follow.Channel{ID: id, Title: ch.Title}, b.app.now())
+// add puts a channel on the follow list and saves it.
+func (b *browser) add(ctx context.Context, id, title string) {
+	next, err := b.state.Add(follow.Channel{ID: id, Title: title}, b.app.now())
 	if errors.Is(err, follow.ErrAlreadyFollowed) {
-		b.status = "already following " + name(ch.Title, id)
+		b.status = "already following " + name(title, id)
 		return
 	}
 	if err != nil {
@@ -330,8 +347,29 @@ func (b *browser) follow(ctx context.Context, target string) {
 	}
 
 	b.state = next
-	b.status = "following " + name(ch.Title, id)
+	b.status = "following " + name(title, id)
+
+	if b.channels {
+		// Stay on the list. Following one channel out of a search is rarely
+		// the last thing anyone does with that search.
+		for i := range b.rows {
+			if b.rows[i].ChannelID == id {
+				b.rows[i].Followed = true
+			}
+		}
+		return
+	}
 	b.reload(ctx)
+}
+
+// titleIn is the name a row on screen already carries for a channel.
+func titleIn(rows []follow.Row, id string) string {
+	for _, r := range rows {
+		if r.ChannelID == id && r.Channel != "" {
+			return r.Channel
+		}
+	}
+	return ""
 }
 
 func (b *browser) unfollow(target string) {
@@ -376,9 +414,44 @@ func (b *browser) reload(ctx context.Context) {
 	if len(fetched) > 0 {
 		b.fetched, b.failed = fetched, failed
 	}
-	b.query, b.dashboard = "", nil
+	b.query, b.channels, b.dashboard = "", false, nil
 	b.rows = follow.Dashboard(b.state, b.fetched, dashboardRows)
 	b.selected = tui.Move(b.selected, 0, len(b.rows))
+}
+
+// followRow follows the channel the row under the cursor belongs to. A key
+// rather than a command because it takes no argument and is not rare
+// (ADR-011), and a video row answers it the same way a channel row does.
+func (b *browser) followRow(ctx context.Context) {
+	if b.selected >= len(b.rows) {
+		return
+	}
+	r := b.rows[b.selected]
+	if r.ChannelID == "" {
+		b.status = "that row does not say which channel it is from"
+		return
+	}
+	b.follow(ctx, r.ChannelID)
+}
+
+// runChannelSearch replaces the rows with channels.
+func (b *browser) runChannelSearch(ctx context.Context, query string) {
+	if b.dashboard == nil {
+		b.dashboard = b.rows
+	}
+	b.query, b.channels = query, true
+	b.status = "searching…"
+	b.rows, b.selected = nil, 0
+	_ = b.draw()
+
+	found, err := b.app.search.Channels(ctx, query, dashboardRows)
+	if err != nil {
+		b.status = searchTrouble(err)
+		return
+	}
+
+	b.status = ""
+	b.rows = follow.ChannelResults(b.state, found)
 }
 
 // runSearch replaces the rows with results, keeping the dashboard to come back
@@ -387,7 +460,7 @@ func (b *browser) runSearch(ctx context.Context, query string) {
 	if b.dashboard == nil {
 		b.dashboard = b.rows
 	}
-	b.query = query
+	b.query, b.channels = query, false
 	b.status = "searching…"
 	b.rows, b.selected = nil, 0
 	_ = b.draw()
@@ -407,7 +480,7 @@ func (b *browser) leaveResults() {
 	if b.query == "" {
 		return
 	}
-	b.query, b.status = "", ""
+	b.query, b.channels, b.status = "", false, ""
 	b.rows, b.dashboard = b.dashboard, nil
 	b.selected = tui.Move(0, 0, len(b.rows))
 }
@@ -497,7 +570,7 @@ func (b *browser) load(ctx context.Context) error {
 
 	b.state, b.fetched, b.failed = state, fetched, failed
 	b.dashboard = nil
-	b.query = ""
+	b.query, b.channels = "", false
 	b.rows = follow.Dashboard(state, fetched, dashboardRows)
 	b.selected = tui.Move(b.selected, 0, len(b.rows))
 	if b.status == "refreshing…" {
@@ -526,6 +599,7 @@ func (b *browser) draw() error {
 		Selected:    b.selected,
 		Status:      b.status,
 		Query:       b.query,
+		Channels:    b.channels,
 		Line:        b.line,
 		Typing:      b.typing,
 		Interactive: true,

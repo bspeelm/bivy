@@ -14,6 +14,8 @@ type Intent any
 type (
 	// Search asks for videos matching words.
 	Search struct{ Query string }
+	// Channels asks for channels matching words.
+	Channels struct{ Query string }
 	// Follow adds a channel: a handle, a channel URL, an identifier, or the
 	// name of a channel already on screen.
 	Follow struct{ Target string }
@@ -51,6 +53,17 @@ var Commands = []Command{
 				return nil, badArgument{"search", "something to look for"}
 			}
 			return Search{Query: arg}, nil
+		},
+	},
+	{
+		Name:     "channels",
+		Summary:  "find channels by words, then press f to follow one",
+		Argument: "words",
+		run: func(arg string) (Intent, error) {
+			if arg == "" {
+				return nil, badArgument{"channels", "something to look for"}
+			}
+			return Channels{Query: arg}, nil
 		},
 	},
 	{

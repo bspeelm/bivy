@@ -19,6 +19,6 @@
 
 [2m────────────────────────────────────────────────────────────────────────────────[0m
 [2mnothing playing                                                                 [0m
-[2m  search <words>   follow <channel>   unfollow <channel>   refresh   help       [0m
-[2m  quit                                                                          [0m
+[2m  search <words>   channels <words>   follow <channel>   unfollow <channel>     [0m
+[2m  refresh   help   quit                                                         [0m
 :█                                                                              
