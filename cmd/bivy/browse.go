@@ -691,6 +691,7 @@ func (b *browser) draw() error {
 		ArtRows:     artRows,
 		Rows:        b.rows,
 		Failed:      b.failedNow(),
+		Reached:     len(b.fetched),
 		Now:         b.app.now(),
 		Width:       width,
 		Height:      height,
