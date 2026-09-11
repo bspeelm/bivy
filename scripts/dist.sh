@@ -13,6 +13,22 @@ cd "$(dirname "$0")/.."
 VERSION=${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}
 OUT=dist
 
+# The compiler is part of the artefact. Two Go versions build the same source
+# into different bytes, so "rebuild the tag and compare" is only an offer worth
+# making if the rebuild uses the compiler the release used. go.mod names it and
+# CI reads the same line, so there is one answer rather than two.
+#
+# Pinned rather than floored: GOTOOLCHAIN=auto takes the newer of the local
+# toolchain and this one, which is the right default for building and the wrong
+# one for reproducing.
+goversion=$(awk '/^go /{print $2; exit}' go.mod)
+case $goversion in
+	*.*.*) ;;
+	*.*) goversion="$goversion.0" ;;
+esac
+GOTOOLCHAIN="go$goversion"
+export GOTOOLCHAIN
+
 # Two builds of one commit must produce the same bytes, or a checksum says only
 # "this is the copy I happened to upload". tar records mtimes, owners and
 # directory order, and gzip records a timestamp of its own; none of those are
