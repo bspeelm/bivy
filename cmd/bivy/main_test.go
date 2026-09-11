@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bspeelm/bivy/internal/follow"
 	"github.com/bspeelm/bivy/internal/media"
 	"github.com/bspeelm/bivy/internal/store"
+	"github.com/bspeelm/bivy/internal/tui"
 )
 
 const (
@@ -487,4 +489,55 @@ func TestTargetRefusesOptionShapedInput(t *testing.T) {
 			t.Errorf("target(%q) returned no error", bad)
 		}
 	}
+}
+
+// Every key the screen offers is a key `bivy help` documents.
+//
+// Milestone 3 added the search key to the hint line and not to the usage text,
+// so the only way to discover it was to already be looking at the screen it is
+// printed on. The hint line is the authority: it is what a running bivy
+// promises, and the usage has to keep up with it.
+func TestTheUsageDocumentsEveryKeyTheScreenOffers(t *testing.T) {
+	screens := []tui.Dashboard{
+		{Interactive: true, Now: at(10), Rows: someRows()},
+		{Interactive: true, Now: at(10), Query: "x", Rows: someRows()},
+	}
+
+	var checked int
+	for _, d := range screens {
+		for _, offer := range strings.Split(hintLine(t, tui.Render(d)), "·") {
+			fields := strings.Fields(offer)
+			if len(fields) == 0 {
+				continue
+			}
+			key := fields[0]
+			checked++
+			if !strings.Contains(usage, key) {
+				t.Errorf("the screen offers %q and `bivy help` never mentions %q", strings.TrimSpace(offer), key)
+			}
+		}
+	}
+	if checked < 8 {
+		t.Fatalf("found %d offered keys; the parser has stopped matching", checked)
+	}
+}
+
+func someRows() []follow.Row {
+	return []follow.Row{{
+		Video:   media.Video{ID: "aaaaaaaaaaa", Title: "A row", Published: at(9)},
+		Channel: "Aye",
+	}}
+}
+
+// The hint line is the last non-empty line of a rendered screen.
+func hintLine(t *testing.T, frame string) string {
+	t.Helper()
+	lines := strings.Split(strings.TrimRight(frame, "\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			return lines[i]
+		}
+	}
+	t.Fatal("the rendered screen has no lines")
+	return ""
 }
