@@ -186,6 +186,34 @@ func chrome(d Dashboard, width int) int {
 	return n
 }
 
+// ArtRow is the screen row the picture starts on, counting from one, and zero
+// where there is none. Halfway down its pane rather than at the top: a small
+// picture in a corner reads as one that failed to fill the space.
+func (d Dashboard) ArtRow() int {
+	_, artRows := d.artPane()
+	if artRows == 0 || len(d.Rows) == 0 {
+		return 0
+	}
+
+	visible := d.visibleRows()
+	first, last := window(d.Selected, len(d.Rows), visible)
+	// Past the title and the rule, counting from one.
+	const top = 3
+	return top + max(0, (min(visible, last-first)-artRows)/2)
+}
+
+// visibleRows is how many list rows this frame has room for.
+func (d Dashboard) visibleRows() int {
+	width, height := d.Width, d.Height
+	if width < minWidth {
+		width = defaultWidth
+	}
+	if height <= 0 {
+		height = defaultHeight
+	}
+	return max(1, height-chrome(d, width))
+}
+
 // ArtBox is the picture's size in cells for a window of this size, and zero
 // where there is no room worth the space. A quarter of the width, bounded: one
 // that grows without limit takes the screen from what it illustrates, and one
@@ -259,7 +287,7 @@ func heading(d Dashboard) string {
 // indented past the picture's pane, including those below it, so the titles
 // form one column rather than stepping left half way down.
 func list(d Dashboard, width, visible int) string {
-	artCols, artRows := d.artPane()
+	artCols, _ := d.artPane()
 	indent := 0
 	if artCols > 0 {
 		indent = artCols + 2
@@ -271,19 +299,8 @@ func list(d Dashboard, width, visible int) string {
 
 	first, last := window(d.Selected, len(d.Rows), visible)
 
-	// The picture sits in the middle of the pane rather than at the top of it.
-	// A small picture in the corner of a tall screen reads as something that
-	// failed to fill the space; in the middle it reads as a pane.
-	artAt := max(0, (min(visible, last-first)-artRows)/2)
-
 	var b strings.Builder
 	for i := first; i < last; i++ {
-		var line string
-		if artCols > 0 && i-first == artAt {
-			// Placed where the cursor already is, without moving it.
-			line = d.Art
-		}
-
 		cursor := " "
 		if d.Interactive && i == d.Selected {
 			cursor = ">"
@@ -298,13 +315,12 @@ func list(d Dashboard, width, visible int) string {
 			text = forward(indent) + text
 		}
 
-		b.WriteString(line + text)
+		b.WriteString(text)
 		b.WriteString("\n")
 	}
 
-	drawn := last - first
-	// The pane may outlast the list, and the rules sit below both.
-	for range max(0, max(visible-drawn, artRows-drawn)) {
+	// Padded so the frame is exactly as tall as the window.
+	for range max(0, visible-(last-first)) {
 		b.WriteString("\n")
 	}
 	return b.String()

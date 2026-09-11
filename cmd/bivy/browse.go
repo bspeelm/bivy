@@ -56,6 +56,7 @@ type screen interface {
 	Graphics() graphics.Capability
 	Size() (width, height int)
 	Draw(frame string) error
+	DrawArt(row int, art string) error
 	Keys() <-chan term.Press
 	Resized() <-chan struct{}
 	Close() error
@@ -902,7 +903,7 @@ func (b *browser) remember(id string, data []byte) {
 func (b *browser) draw() error {
 	width, height := b.screen.Size()
 	cols, rows := tui.ArtBox(width, height)
-	return b.screen.Draw(tui.Render(tui.Dashboard{
+	model := tui.Dashboard{
 		Art:         b.picture(context.Background(), cols, rows),
 		Rows:        b.rows,
 		Failed:      b.failedNow(),
@@ -920,7 +921,14 @@ func (b *browser) draw() error {
 		Line:        b.line,
 		Typing:      b.typing,
 		Interactive: true,
-	}))
+	}
+
+	if err := b.screen.Draw(tui.Render(model)); err != nil {
+		return err
+	}
+	// After the text, and only when it changed. Placed by row rather than
+	// written into the frame, so it cannot shift where a line of text lands.
+	return b.screen.DrawArt(model.ArtRow(), model.Art)
 }
 
 // playbackTrouble explains a video that would not play.

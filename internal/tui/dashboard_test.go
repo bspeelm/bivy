@@ -615,14 +615,18 @@ func TestTitlesFormOneColumnBesideThePicture(t *testing.T) {
 	}
 }
 
-// Only the highlighted row has a picture, and there is only ever one.
-func TestThereIsOnePicture(t *testing.T) {
+// The picture is not in the frame at all: it is positioned by row and drawn
+// after the text, so nothing about it can shift where a line of text lands.
+func TestThePictureIsNotInTheFrame(t *testing.T) {
 	d := Dashboard{
 		Rows: manyRows(12), Now: now, Width: 100, Height: 24,
 		Interactive: true, Selected: 3, Art: "<PIC>",
 	}
-	if got := strings.Count(Render(d), "<PIC>"); got != 1 {
-		t.Errorf("the frame draws %d pictures, want 1", got)
+	if strings.Contains(Render(d), "<PIC>") {
+		t.Error("the picture was written into the frame")
+	}
+	if d.ArtRow() < 3 {
+		t.Errorf("ArtRow = %d, which is on the title or the rule", d.ArtRow())
 	}
 }
 
@@ -659,46 +663,47 @@ func TestWhenNoFeedAnswersItSaysSoOnce(t *testing.T) {
 }
 
 // A small picture in the corner of a tall screen reads as something that
-// failed to fill the space. In the middle of its pane it reads as a pane.
+// failed to fill the space. Halfway down its pane it reads as a pane.
 func TestThePictureSitsInTheMiddleOfItsPane(t *testing.T) {
 	d := Dashboard{
 		Rows: manyRows(40), Now: now, Width: 100, Height: 40,
 		Interactive: true, Art: "<PIC>",
 	}
 
-	var at = -1
-	var row int
-	for _, line := range strings.Split(Render(d), "\n") {
-		if strings.Contains(line, "Video number") {
-			if strings.Contains(line, "<PIC>") {
-				at = row
-			}
-			row++
-		}
-	}
-	if at < 0 {
-		t.Fatal("the picture was not drawn on any row")
-	}
-	if at == 0 {
-		t.Error("the picture is at the top of the pane rather than the middle of it")
-	}
-
 	_, artRows := ArtBox(100, 40)
-	if want := (row - artRows) / 2; at != want {
-		t.Errorf("the picture starts at row %d of %d, want %d", at, row, want)
+	visible := d.visibleRows()
+	if want := 3 + (visible-artRows)/2; d.ArtRow() != want {
+		t.Errorf("ArtRow = %d, want %d (%d rows of list, %d of picture)",
+			d.ArtRow(), want, visible, artRows)
+	}
+	// And it never runs past the rule at the bottom.
+	if d.ArtRow()+artRows > 3+visible {
+		t.Errorf("a picture at row %d and %d tall reaches past the list", d.ArtRow(), artRows)
 	}
 }
 
 // A pane taller than the list has nowhere to centre into, and starts at the
-// top rather than above the rule.
+// top of the list rather than above it.
 func TestAPictureTallerThanTheListStartsAtTheTop(t *testing.T) {
 	d := Dashboard{
 		Rows: manyRows(3), Now: now, Width: 160, Height: 24,
 		Interactive: true, Art: "<PIC>",
 	}
-	first := strings.Split(Render(d), "\n")[2]
-	if !strings.Contains(first, "<PIC>") {
-		t.Errorf("a picture taller than the list did not start on the first row:\n%q", first)
+	if got := d.ArtRow(); got != 3 {
+		t.Errorf("ArtRow = %d, want the first list row", got)
+	}
+}
+
+// No picture, no row.
+func TestNoPictureNoRow(t *testing.T) {
+	for _, d := range []Dashboard{
+		{Rows: manyRows(5), Width: 100, Height: 24, Interactive: true},
+		{Rows: nil, Width: 100, Height: 24, Interactive: true, Art: "<PIC>"},
+		{Rows: manyRows(5), Width: 40, Height: 24, Interactive: true, Art: "<PIC>"},
+	} {
+		if got := d.ArtRow(); got != 0 {
+			t.Errorf("ArtRow = %d with no picture to place", got)
+		}
 	}
 }
 
