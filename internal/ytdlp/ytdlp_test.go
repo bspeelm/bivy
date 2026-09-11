@@ -1,0 +1,232 @@
+package ytdlp
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+)
+
+// The extractor has options that run arbitrary shell commands, so what may
+// reach its argv is the load-bearing question in this package (PLAN.md §7).
+func TestSearchTermIsNeverOptionShaped(t *testing.T) {
+	for _, query := range []string{
+		"ordinary query",
+		"--exec=touch /tmp/pwned",
+		"-rf",
+		"--cookies-from-browser firefox",
+		"; rm -rf /",
+		"$(whoami)",
+		"`id`",
+		"--",
+	} {
+		term, err := SearchTerm(query, 5)
+		if err != nil {
+			// Refused outright is the other acceptable answer.
+			continue
+		}
+		if strings.HasPrefix(term, "-") {
+			t.Errorf("SearchTerm(%q) = %q, which an argument parser reads as an option", query, term)
+		}
+		if !strings.HasPrefix(term, "ytsearch") {
+			t.Errorf("SearchTerm(%q) = %q, which is not a search term", query, term)
+		}
+	}
+}
+
+// A leading dash is refused rather than merely neutralised by the prefix. The
+// prefix is the guarantee; this is the belt for it.
+func TestSearchTermRefusesALeadingDash(t *testing.T) {
+	for _, query := range []string{"-rf", "--exec=touch /tmp/pwned", "-"} {
+		if _, err := SearchTerm(query, 5); err == nil {
+			t.Errorf("SearchTerm(%q) returned no error", query)
+		}
+	}
+}
+
+// A query is typed by the user but travels to a subprocess and back to a
+// terminal. Control characters are removed on the way in as well as out.
+func TestSearchTermStripsControlCharacters(t *testing.T) {
+	term, err := SearchTerm("before\x1b[31m after\x00", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range term {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			t.Errorf("SearchTerm kept %U in %q", r, term)
+		}
+	}
+}
+
+func TestSearchTermRefusesNothing(t *testing.T) {
+	for _, query := range []string{"", "   ", "\x00\x1b"} {
+		if _, err := SearchTerm(query, 5); err == nil {
+			t.Errorf("SearchTerm(%q) returned no error", query)
+		}
+	}
+}
+
+func TestSearchTermBoundsTheCount(t *testing.T) {
+	for _, tc := range []struct {
+		limit int
+		want  string
+	}{
+		{5, "ytsearch5:cats"},
+		{1, "ytsearch1:cats"},
+		{0, "ytsearch30:cats"},
+		{-1, "ytsearch30:cats"},
+		{9999, "ytsearch30:cats"},
+	} {
+		got, err := SearchTerm("cats", tc.limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != tc.want {
+			t.Errorf("SearchTerm(cats, %d) = %q, want %q", tc.limit, got, tc.want)
+		}
+	}
+}
+
+func TestSearchTermRefusesAnEssay(t *testing.T) {
+	if _, err := SearchTerm(strings.Repeat("a", 300), 5); err == nil {
+		t.Error("a 300-character query was accepted")
+	}
+}
+
+// The shape the extractor actually emits, taken from a real run: a flat search
+// result has a duration and no publish timestamp.
+const sampleOutput = `{"id":"kYJ8r4d6gy0","title":"Watch Videos In Your Linux Terminal","channel":"DistroTube","uploader":"DistroTube","channel_id":"UCVls1GmFKf6WlTraIb_IaJg","duration":89,"timestamp":null,"view_count":23065,"_type":"url"}
+{"id":"dQw4w9WgXcQ","title":"Another One","channel":"Someone","channel_id":"UCabcdefghijklmnopqrstuv","duration":212.0,"timestamp":1757000000}
+`
+
+func TestParseReadsResults(t *testing.T) {
+	videos := Parse(strings.NewReader(sampleOutput))
+
+	if got, want := len(videos), 2; got != want {
+		t.Fatalf("%d results, want %d", got, want)
+	}
+
+	first := videos[0]
+	if got, want := first.ID, "kYJ8r4d6gy0"; got != want {
+		t.Errorf("id = %q, want %q", got, want)
+	}
+	if got, want := first.Title, "Watch Videos In Your Linux Terminal"; got != want {
+		t.Errorf("title = %q, want %q", got, want)
+	}
+	if got, want := first.Author, "DistroTube"; got != want {
+		t.Errorf("author = %q, want %q", got, want)
+	}
+	if got, want := first.Duration, 89*time.Second; got != want {
+		t.Errorf("duration = %s, want %s", got, want)
+	}
+	// A flat search result carries no publish time, and one is not invented.
+	if !first.Published.IsZero() {
+		t.Errorf("published = %s, want it left unset", first.Published)
+	}
+	if got, want := first.Thumbnail, "https://i.ytimg.com/vi/kYJ8r4d6gy0/hqdefault.jpg"; got != want {
+		t.Errorf("thumbnail = %q, want %q", got, want)
+	}
+
+	if videos[1].Published.IsZero() {
+		t.Error("a result that did carry a timestamp lost it")
+	}
+}
+
+// One bad line costs one row. The extractor is a separate program whose output
+// format is not bivy's to guarantee.
+func TestParseDropsWhatItCannotUse(t *testing.T) {
+	const mixed = `not json at all
+{"id":"../../etc/passwd","title":"Path"}
+{"id":"kYJ8r4d6gy0","title":"Fine"}
+{"id":"","title":"Empty"}
+{"id":"toolongtobeanid","title":"Long"}
+`
+	videos := Parse(strings.NewReader(mixed))
+	if got, want := len(videos), 1; got != want {
+		t.Fatalf("%d results kept, want %d", got, want)
+	}
+	if got, want := videos[0].Title, "Fine"; got != want {
+		t.Errorf("kept %q, want %q", got, want)
+	}
+}
+
+// A title from a search result is remote text on its way to a terminal, the
+// same as one from a feed.
+func TestParseStripsControlCharactersFromResults(t *testing.T) {
+	const hostile = `{"id":"kYJ8r4d6gy0","title":"a2Jb","channel":"cd"}`
+
+	videos := Parse(strings.NewReader(hostile))
+	if len(videos) != 1 {
+		t.Fatalf("%d results, want 1", len(videos))
+	}
+	for _, s := range []string{videos[0].Title, videos[0].Author} {
+		for _, r := range s {
+			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+				t.Errorf("%q reached the caller carrying %U", s, r)
+			}
+		}
+	}
+}
+
+// A thumbnail address is derived, so a compromised extractor cannot aim the
+// fetch a later milestone makes.
+func TestParseDerivesTheThumbnailAddress(t *testing.T) {
+	const redirect = `{"id":"kYJ8r4d6gy0","title":"T","thumbnails":[{"url":"https://attacker.example/track"}]}`
+
+	videos := Parse(strings.NewReader(redirect))
+	if got, want := videos[0].Thumbnail, "https://i.ytimg.com/vi/kYJ8r4d6gy0/hqdefault.jpg"; got != want {
+		t.Errorf("thumbnail = %q, want %q", got, want)
+	}
+}
+
+// A channel identifier that is not one is discarded rather than carried: it
+// would otherwise be interpolated into a feed URL by `follow`.
+func TestParseDiscardsAChannelIdItDoesNotBelieve(t *testing.T) {
+	const lying = `{"id":"kYJ8r4d6gy0","title":"T","channel_id":"--exec=touch /tmp/pwned"}`
+
+	videos := Parse(strings.NewReader(lying))
+	if videos[0].ChannelID != "" {
+		t.Errorf("channel id = %q, want it discarded", videos[0].ChannelID)
+	}
+}
+
+func TestParseHandlesNothing(t *testing.T) {
+	if got := Parse(strings.NewReader("")); len(got) != 0 {
+		t.Errorf("%d results from no output", len(got))
+	}
+}
+
+// The extractor is absent on a machine that has only ever used the dashboard,
+// which never needs it. That is a normal state with a name, not a crash.
+func TestSearchReportsAMissingExtractor(t *testing.T) {
+	c := &Client{Binary: "no-such-extractor-anywhere"}
+
+	_, err := c.Search(context.Background(), "cats", 5)
+	if !errors.Is(err, ErrNotInstalled) {
+		t.Errorf("error = %v, want ErrNotInstalled", err)
+	}
+}
+
+func TestSearchRefusesABadQueryBeforeRunningAnything(t *testing.T) {
+	c := &Client{Binary: "no-such-extractor-anywhere"}
+
+	// Refused by SearchTerm, so the missing binary is never even reached.
+	_, err := c.Search(context.Background(), "-rf", 5)
+	if err == nil {
+		t.Fatal("an option-shaped query returned no error")
+	}
+	if errors.Is(err, ErrNotInstalled) {
+		t.Error("the query reached the process instead of being refused first")
+	}
+}
+
+func TestSearchHonoursACancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	c := &Client{Binary: "no-such-extractor-anywhere"}
+	if _, err := c.Search(ctx, "cats", 5); err == nil {
+		t.Fatal("a cancelled context still ran a search")
+	}
+}

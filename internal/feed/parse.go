@@ -89,14 +89,11 @@ func Parse(r io.Reader) (media.Channel, error) {
 	return ch, nil
 }
 
-// thumbnailURL rebuilds the address from the video identifier. The supplied
-// URL is a string a remote server chose and is destined for a fetch a later
-// milestone makes, so deriving it means a hostile feed cannot aim that fetch.
-// The feed's value is read only as a statement that a thumbnail exists.
+// thumbnailURL reads the feed's value only as a statement that a thumbnail
+// exists, and derives the address itself.
 func thumbnailURL(supplied, videoID string) string {
-	const host = "https://i.ytimg.com/vi/"
 	if supplied == "" {
 		return ""
 	}
-	return host + videoID + "/hqdefault.jpg"
+	return media.ThumbnailURL(videoID)
 }

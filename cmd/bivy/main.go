@@ -21,6 +21,7 @@ import (
 	"github.com/bspeelm/bivy/internal/media"
 	"github.com/bspeelm/bivy/internal/store"
 	"github.com/bspeelm/bivy/internal/tui"
+	"github.com/bspeelm/bivy/internal/ytdlp"
 )
 
 // Version is stamped at build time. A plain string literal, because -X does
@@ -56,6 +57,9 @@ type app struct {
 	// interface: the loop that drives a player is worth testing, and mpv is
 	// not something a test may require to be installed.
 	newPlayer func(context.Context) (player, error)
+	// search runs the extractor, which is likewise not something a test may
+	// require to be installed.
+	search searcher
 }
 
 func main() {
@@ -71,6 +75,7 @@ func main() {
 	a := &app{
 		store:     s,
 		feeds:     feed.New(),
+		search:    ytdlp.New(),
 		now:       time.Now,
 		out:       os.Stdout,
 		errOut:    os.Stderr,

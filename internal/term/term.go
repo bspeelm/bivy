@@ -17,24 +17,41 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 )
 
-// Key is a decoded keypress. Only the keys bivy acts on have names; anything
-// else is KeyNone and is ignored rather than guessed at.
+// Key names a keypress that is not a character.
+//
+// What the characters mean is not decided here. A list reads "j" as down and a
+// search box reads it as the letter j, and only the screen knows which it is
+// looking at — so this package reports what was pressed and the caller decides
+// what it meant.
 type Key int
 
 const (
 	KeyNone Key = iota
+	KeyRune
 	KeyUp
 	KeyDown
-	KeyTop
-	KeyBottom
+	KeyHome
+	KeyEnd
 	KeyEnter
-	KeyRefresh
-	KeyQuit
+	KeyBackspace
+	KeyEscape
+	KeyInterrupt
 )
+
+// Press is one keypress: a named key, or a character in Rune when Key is
+// KeyRune.
+type Press struct {
+	Key  Key
+	Rune rune
+}
+
+// IsRune reports that this press is the character r.
+func (p Press) IsRune(r rune) bool { return p.Key == KeyRune && p.Rune == r }
 
 // Written out rather than pulled from terminfo: bivy sends five of them, and a
 // dependency to hold five strings is the trade this package exists to refuse.
@@ -53,7 +70,7 @@ type Terminal struct {
 	in      *os.File
 	out     *os.File
 	state   *term.State
-	keys    chan Key
+	keys    chan Press
 	resized chan struct{}
 	closed  chan struct{}
 }
@@ -80,7 +97,7 @@ func Open(in, out *os.File) (*Terminal, error) {
 		in:      in,
 		out:     out,
 		state:   state,
-		keys:    make(chan Key),
+		keys:    make(chan Press),
 		resized: make(chan struct{}, 1),
 		closed:  make(chan struct{}),
 	}
@@ -150,7 +167,7 @@ func (t *Terminal) Draw(frame string) error {
 }
 
 // Keys yields decoded keypresses until the terminal is closed.
-func (t *Terminal) Keys() <-chan Key { return t.keys }
+func (t *Terminal) Keys() <-chan Press { return t.keys }
 
 // Resized fires when the terminal changes size, holding at most one pending
 // notification: a redraw needs the current size, not a queue of stale ones.
@@ -169,18 +186,18 @@ func (t *Terminal) readKeys() {
 		pending = append(pending, buf[:n]...)
 
 		for len(pending) > 0 {
-			key, used := DecodeKey(pending)
+			press, used := DecodeKey(pending)
 			if used == 0 {
 				// An incomplete escape sequence. Wait for the rest rather
 				// than reporting the escape as a keypress of its own.
 				break
 			}
 			pending = pending[used:]
-			if key == KeyNone {
+			if press.Key == KeyNone {
 				continue
 			}
 			select {
-			case t.keys <- key:
+			case t.keys <- press:
 			case <-t.closed:
 				return
 			}
@@ -211,79 +228,83 @@ func (t *Terminal) watchResize() {
 // all of it, so the caller reads more rather than deciding a lone escape was
 // pressed. Pure, so every sequence bivy understands is tested without a
 // terminal.
-func DecodeKey(b []byte) (Key, int) {
+func DecodeKey(b []byte) (Press, int) {
 	if len(b) == 0 {
-		return KeyNone, 0
+		return Press{}, 0
 	}
 
 	switch b[0] {
 	case 0x1b:
 		return decodeEscape(b)
 	case '\r', '\n':
-		return KeyEnter, 1
+		return Press{Key: KeyEnter}, 1
+	case 0x7f, 0x08:
+		return Press{Key: KeyBackspace}, 1
 	case 0x03, 0x04: // ctrl-c, ctrl-d
-		return KeyQuit, 1
-	case 'q':
-		return KeyQuit, 1
-	case 'j':
-		return KeyDown, 1
-	case 'k':
-		return KeyUp, 1
-	case 'g':
-		return KeyTop, 1
-	case 'G':
-		return KeyBottom, 1
-	case 'r':
-		return KeyRefresh, 1
-	case ' ':
-		return KeyEnter, 1
+		return Press{Key: KeyInterrupt}, 1
 	}
 
-	// Anything else is a key bivy has no use for. Consumed so the stream
-	// advances, reported as nothing so it does nothing.
-	return KeyNone, 1
+	// Any other control byte is a chord bivy has no use for. Consumed so the
+	// stream advances, reported as nothing so it does nothing.
+	if b[0] < 0x20 {
+		return Press{}, 1
+	}
+
+	r, size := utf8.DecodeRune(b)
+	if r == utf8.RuneError {
+		// Either an invalid byte, or a character whose remaining bytes have
+		// not arrived. Waiting is only correct for the second.
+		if size <= 1 && !utf8.FullRune(b) {
+			return Press{}, 0
+		}
+		return Press{}, size
+	}
+	return Press{Key: KeyRune, Rune: r}, size
 }
 
-func decodeEscape(b []byte) (Key, int) {
-	// A lone escape, or the beginning of a sequence whose remainder has not
-	// arrived. Terminals send a sequence in one write, so this is the
-	// incomplete case rather than the escape key.
-	if len(b) < 3 {
-		return KeyNone, 0
+func decodeEscape(b []byte) (Press, int) {
+	// Terminals send a sequence in one write, so a short buffer beginning with
+	// escape is an incomplete sequence rather than the escape key. A lone
+	// escape is reported once the rest of the buffer proves it was alone.
+	if len(b) == 1 {
+		return Press{Key: KeyEscape}, 1
 	}
 	if b[1] != '[' && b[1] != 'O' {
-		return KeyNone, 1
+		return Press{Key: KeyEscape}, 1
+	}
+	if len(b) < 3 {
+		return Press{}, 0
 	}
 
 	switch b[2] {
 	case 'A':
-		return KeyUp, 3
+		return Press{Key: KeyUp}, 3
 	case 'B':
-		return KeyDown, 3
+		return Press{Key: KeyDown}, 3
 	case 'H':
-		return KeyTop, 3
+		return Press{Key: KeyHome}, 3
 	case 'F':
-		return KeyBottom, 3
+		return Press{Key: KeyEnd}, 3
 	}
 
 	// A longer sequence: a parameterised CSI, ending at its final byte. Home
 	// and End arrive this way on some terminals, and everything else here is
-	// consumed so that its trailing bytes are not read as keypresses.
+	// consumed so that its trailing bytes are not read as characters.
 	if b[1] == '[' {
 		for i := 2; i < len(b); i++ {
 			if b[i] >= 0x40 && b[i] <= 0x7e {
 				if b[i] == '~' && i == 3 {
 					switch b[2] {
 					case '1', '7':
-						return KeyTop, i + 1
+						return Press{Key: KeyHome}, i + 1
 					case '4', '8':
-						return KeyBottom, i + 1
+						return Press{Key: KeyEnd}, i + 1
 					}
 				}
-				return KeyNone, i + 1
+				return Press{}, i + 1
 			}
 		}
-		return KeyNone, 0
+		return Press{}, 0
 	}
-	return KeyNone, 3
+	return Press{}, 3
 }
