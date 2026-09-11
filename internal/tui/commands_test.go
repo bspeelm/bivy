@@ -157,3 +157,76 @@ func TestCommandNamesAreUnique(t *testing.T) {
 		seen[c.Name] = true
 	}
 }
+
+// A command may be shortened to any prefix only one command answers to. That
+// is the spelling anyone who has used a modal editor will try, and it is what
+// makes quitting cheap enough to be worth taking off the keyboard.
+func TestAnUnambiguousPrefixIsTheCommand(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		want Intent
+	}{
+		{"q", Quit{}},
+		{"qu", Quit{}},
+		{"h", ShowHelp{}},
+		{"se cats", Search{Query: "cats"}},
+		{"s cats", Search{Query: "cats"}},
+		{"f @someone", Follow{Target: "@someone"}},
+		{"un Aye", Unfollow{Target: "Aye"}},
+		{"re", Refresh{}},
+	} {
+		got, err := Parse(tc.line)
+		if err != nil {
+			t.Errorf("Parse(%q): %v", tc.line, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("Parse(%q) = %#v, want %#v", tc.line, got, tc.want)
+		}
+	}
+}
+
+// A prefix several commands answer to is refused, naming them, rather than
+// picking one.
+func TestAnAmbiguousPrefixIsRefused(t *testing.T) {
+	// "u" is unambiguous today; this holds the behaviour rather than the
+	// accident of which names exist, by asking about a prefix two commands
+	// share whenever one does.
+	shared := map[string][]string{}
+	for _, c := range Commands {
+		for n := 1; n < len(c.Name); n++ {
+			p := c.Name[:n]
+			shared[p] = append(shared[p], c.Name)
+		}
+	}
+
+	var checked int
+	for prefix, names := range shared {
+		if len(names) < 2 {
+			continue
+		}
+		checked++
+		if _, err := Parse(prefix); err == nil {
+			t.Errorf("Parse(%q) chose one of %v instead of refusing", prefix, names)
+		} else if !strings.Contains(err.Error(), "could be") {
+			t.Errorf("Parse(%q) said %q, want it to name the candidates", prefix, err)
+		}
+	}
+	if checked == 0 {
+		t.Skip("no two commands currently share a prefix")
+	}
+}
+
+// An exact name wins over being the prefix of a longer one.
+func TestAnExactNameBeatsALongerMatch(t *testing.T) {
+	for _, c := range Commands {
+		got, err := Parse(c.Name + " x")
+		if err != nil {
+			t.Errorf("Parse(%q): %v", c.Name, err)
+			continue
+		}
+		if got == nil {
+			t.Errorf("Parse(%q) returned nothing", c.Name)
+		}
+	}
+}

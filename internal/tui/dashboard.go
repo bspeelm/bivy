@@ -79,11 +79,11 @@ const (
 )
 
 const (
-	keyHints    = "  ↑↓ move · enter play · / search · : commands · r refresh · q quit"
+	keyHints    = "  ↑↓ move · enter play · / search · : commands · r refresh · :q quit"
 	searchHints = "  tab complete · enter run · esc cancel"
-	resultHints = "  ↑↓ move · enter play · / search again · : commands · esc back · q quit"
-	emptyHints  = "  / search · : commands · r refresh · q quit"
-	noResults   = "  / search again · : commands · esc back · q quit"
+	resultHints = "  ↑↓ move · enter play · / search again · : commands · esc back · :q quit"
+	emptyHints  = "  / search · : commands · r refresh · :q quit"
+	noResults   = "  / search again · : commands · esc back · :q quit"
 )
 
 // completions lists what the line could still become, with a summary each.
