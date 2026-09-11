@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"unicode/utf8"
 
@@ -154,6 +155,11 @@ func (t *Terminal) Size() (width, height int) {
 // Draw replaces what is on screen with frame, clearing each line as it is
 // written: blanking first shows an empty screen for one refresh.
 func (t *Terminal) Draw(frame string) error {
+	// The frame fills the screen exactly, so the newline after its last line
+	// would scroll everything up by one. Every frame would drift a row, and
+	// what drifted off the top would still be on screen under the new frame.
+	frame = strings.TrimSuffix(frame, "\n")
+
 	var b []byte
 	// Any picture the terminal holds is taken away first: writing text over
 	// one does not remove it.
@@ -162,18 +168,18 @@ func (t *Terminal) Draw(frame string) error {
 	}
 	b = append(b, cursorHome...)
 
+	// Each line is cleared before it is written, not after. A row may begin
+	// past a picture's pane, and clearing from where the text ends would
+	// leave whatever was in the pane before it still there.
+	b = append(b, clearLine...)
 	for _, c := range []byte(frame) {
 		if c == '\n' {
-			// Carriage return as well: in raw mode a newline moves down
-			// without moving left, and every row would start further across
-			// than the one above it.
-			b = append(b, clearLine...)
 			b = append(b, '\r', '\n')
+			b = append(b, clearLine...)
 			continue
 		}
 		b = append(b, c)
 	}
-	b = append(b, clearLine...)
 	b = append(b, clearBelow...)
 
 	_, err := t.out.Write(b)

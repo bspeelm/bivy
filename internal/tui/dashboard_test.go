@@ -701,3 +701,31 @@ func TestAPictureTallerThanTheListStartsAtTheTop(t *testing.T) {
 		t.Errorf("a picture taller than the list did not start on the first row:\n%q", first)
 	}
 }
+
+// A frame is exactly as tall as the window it is for. One line too many and
+// the terminal scrolls; one too few and the last frame's bottom row survives.
+func TestAFrameIsExactlyTheHeightOfItsWindow(t *testing.T) {
+	for _, c := range []struct {
+		width, height, rows int
+		art                 string
+		typing              bool
+	}{
+		{200, 45, 30, "<A>", false},
+		{200, 45, 30, "", false},
+		{100, 24, 5, "<A>", false},
+		{100, 24, 0, "", false},
+		{100, 16, 40, "<A>", false},
+		{80, 14, 40, "<A>", false},
+		{100, 24, 5, "<A>", true},
+		{60, 20, 3, "", true},
+	} {
+		d := Dashboard{
+			Rows: manyRows(c.rows), Now: now, Width: c.width, Height: c.height,
+			Interactive: true, Art: c.art, Typing: c.typing,
+		}
+		if got := strings.Count(Render(d), "\n"); got != c.height {
+			t.Errorf("a %dx%d window with %d rows (art %v, typing %v) rendered %d lines, want %d",
+				c.width, c.height, c.rows, c.art != "", c.typing, got, c.height)
+		}
+	}
+}

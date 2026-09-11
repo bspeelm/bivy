@@ -189,3 +189,60 @@ func TestAutoWrapIsTurnedOffAndBackOn(t *testing.T) {
 		t.Errorf("autoWrap = %q, which does not turn it back on", autoWrap)
 	}
 }
+
+// draw runs the real Draw against a pipe, so the test reads exactly what a
+// terminal would.
+func draw(t *testing.T, frame string) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	term := &Terminal{out: w}
+	done := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 1<<16)
+		n, _ := r.Read(buf)
+		done <- string(buf[:n])
+	}()
+
+	if err := term.Draw(frame); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	return <-done
+}
+
+// A frame fills the screen exactly, so the newline after its last line would
+// scroll everything up by one — every frame drifting a row, and what drifted
+// off the top still on screen under the new frame.
+func TestDrawDoesNotScrollTheScreen(t *testing.T) {
+	const height = 5
+	frame := strings.Repeat("a line\n", height)
+
+	got := draw(t, frame)
+	if n := strings.Count(got, "\r\n"); n != height-1 {
+		t.Errorf("a %d-line frame wrote %d line breaks, want %d", height, n, height-1)
+	}
+	if strings.HasSuffix(got, "\r\n") {
+		t.Error("the frame ends with a line break, which scrolls the screen")
+	}
+}
+
+// A row may begin past a picture's pane. Clearing from where its text ends
+// would leave whatever was in the pane before it still on screen.
+func TestDrawClearsEachLineBeforeWritingIt(t *testing.T) {
+	got := draw(t, "first\nsecond\n")
+
+	if !strings.HasPrefix(got, cursorHome+clearLine) {
+		t.Errorf("the first line is written before it is cleared: %q", got[:20])
+	}
+	if !strings.Contains(got, "\r\n"+clearLine+"second") {
+		t.Errorf("a later line is written before it is cleared: %q", got)
+	}
+	if strings.Contains(got, "first"+clearLine) {
+		t.Error("a line is cleared after its text, which leaves anything to its left")
+	}
+}
