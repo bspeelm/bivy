@@ -254,3 +254,102 @@ func TestFetchHonoursACancelledContext(t *testing.T) {
 		t.Fatal("a cancelled context still made a request")
 	}
 }
+
+// The feed endpoint answers 404 or 500 to roughly four requests in ten,
+// intermittently, for channels that answer 200 on the next attempt. One
+// attempt makes following a channel a coin toss.
+func TestATransientFailureIsRetried(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusInternalServerError, http.StatusTooManyRequests} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var calls int
+			c := against(t, func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				if calls < 3 {
+					http.Error(w, "not this time", status)
+					return
+				}
+				fmt.Fprint(w, sampleFeed)
+			})
+
+			ch, err := c.Fetch(context.Background(), testChannel)
+			if err != nil {
+				t.Fatalf("gave up after %d attempts: %v", calls, err)
+			}
+			if len(ch.Videos) != 2 {
+				t.Errorf("%d entries, want the feed that finally arrived", len(ch.Videos))
+			}
+		})
+	}
+}
+
+// Retrying is bounded. A channel that genuinely does not exist answers the
+// same way every time, and bivy has to stop and say so.
+func TestRetryingGivesUp(t *testing.T) {
+	var calls int
+	c := against(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		http.Error(w, "gone", http.StatusNotFound)
+	})
+
+	if _, err := c.Fetch(context.Background(), testChannel); err == nil {
+		t.Fatal("a feed that never arrived reported success")
+	}
+	if calls != attempts {
+		t.Errorf("made %d attempts, want %d", calls, attempts)
+	}
+}
+
+// A refusal that will not change is not worth repeating.
+func TestAPermanentFailureIsNotRetried(t *testing.T) {
+	var calls int
+	c := against(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		http.Error(w, "no", http.StatusForbidden)
+	})
+
+	if _, err := c.Fetch(context.Background(), testChannel); err == nil {
+		t.Fatal("a 403 was treated as a feed")
+	}
+	if calls != 1 {
+		t.Errorf("made %d attempts at a 403, want 1", calls)
+	}
+}
+
+// A caller who has stopped waiting is not made to wait through the backoff.
+func TestRetryingStopsWhenTheContextDoes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var calls int
+	c := against(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		cancel()
+		http.Error(w, "later", http.StatusInternalServerError)
+	})
+
+	if _, err := c.Fetch(ctx, testChannel); err == nil {
+		t.Fatal("a cancelled fetch reported success")
+	}
+	if calls > 1 {
+		t.Errorf("made %d attempts after the caller gave up", calls)
+	}
+}
+
+// An oversized body is the server behaving, not failing, so it is not retried.
+func TestAnOversizedBodyIsNotRetried(t *testing.T) {
+	var calls int
+	c := against(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		for written := 0; written <= maxFeedBytes; written += 4096 {
+			if _, err := w.Write(make([]byte, 4096)); err != nil {
+				return
+			}
+		}
+	})
+
+	if _, err := c.Fetch(context.Background(), testChannel); err == nil {
+		t.Fatal("an oversized feed was accepted")
+	}
+	if calls != 1 {
+		t.Errorf("made %d attempts at an oversized body, want 1", calls)
+	}
+}
