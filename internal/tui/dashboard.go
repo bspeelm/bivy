@@ -37,9 +37,11 @@ func Move(selected, delta, rows int) int {
 // Dashboard is what launching bivy shows.
 type Dashboard struct {
 	Rows []follow.Row
-	// Failed names the channels whose feed could not be fetched. Reported
-	// rather than omitted: a dashboard that is quietly short lies.
-	Failed []string
+	// Failed names the channels whose feed could not be fetched, and Reached
+	// counts those that did. Reported rather than omitted: a dashboard that
+	// is quietly short lies.
+	Failed  []string
+	Reached int
 	// Now anchors the relative timestamps, passed in rather than read so the
 	// output is a function of its arguments.
 	Now time.Time
@@ -333,6 +335,12 @@ func status(d Dashboard) string {
 		}
 	}
 	if len(d.Failed) > 0 && d.Query == "" {
+		// Naming the channels is right when some got through and some did
+		// not. When none did, the channels are not what went wrong, and a
+		// list of them reads as four separate problems.
+		if d.Reached == 0 && len(d.Failed) > 1 {
+			return "no feeds are answering — the service is refusing them, which is usually brief"
+		}
 		return fmt.Sprintf("%s could not be reached: %s",
 			plural(len(d.Failed), "channel", "channels"), strings.Join(d.Failed, ", "))
 	}

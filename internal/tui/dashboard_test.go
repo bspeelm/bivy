@@ -579,3 +579,27 @@ func TestAFrameWithAPictureIsStillTheRightHeight(t *testing.T) {
 		t.Error("the picture was not drawn")
 	}
 }
+
+// Naming the channels is right when some got through. When none did, they are
+// not what went wrong, and a list of them reads as four separate problems
+// rather than one.
+func TestWhenNoFeedAnswersItSaysSoOnce(t *testing.T) {
+	none := status(Dashboard{Failed: []string{"Aye", "Bee", "Cee"}, Reached: 0})
+	if strings.Contains(none, "Aye") {
+		t.Errorf("with nothing reached it blamed the channels: %q", none)
+	}
+	if !strings.Contains(none, "no feeds are answering") {
+		t.Errorf("status = %q, want it to say the service is refusing", none)
+	}
+
+	some := status(Dashboard{Failed: []string{"Bee"}, Reached: 2})
+	if !strings.Contains(some, "Bee") {
+		t.Errorf("with some reached it did not name the one that failed: %q", some)
+	}
+
+	// One channel followed and one failure is not evidence about the service.
+	only := status(Dashboard{Failed: []string{"Aye"}, Reached: 0})
+	if !strings.Contains(only, "Aye") {
+		t.Errorf("a single followed channel failing should name it: %q", only)
+	}
+}
