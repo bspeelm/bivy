@@ -14,7 +14,7 @@ take.
 
 ## Status
 
-0.1.0. Following, the dashboard, playback, search and thumbnails all work.
+Following, the dashboard, playback, search and thumbnails all work.
 Every release carries a review packet in `docs/review/` saying what was checked
 before it went out and what was not.
 
