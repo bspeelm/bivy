@@ -18,9 +18,8 @@ import (
 	"github.com/bspeelm/bivy/internal/media"
 )
 
-// Move returns the row the cursor lands on, clamped to the list. Here rather
-// than in the loop that reads keys, because "what does down do at the bottom"
-// is answered by a test rather than by pressing it.
+// Move returns the row the cursor lands on, clamped to the list. Here so that
+// "what does down do at the bottom" is answered by a test.
 func Move(selected, delta, rows int) int {
 	if rows == 0 {
 		return 0
@@ -63,6 +62,11 @@ type Dashboard struct {
 	// has the keyboard.
 	Line   string
 	Typing bool
+	// Art is the picture for the row under the cursor, already turned into
+	// what the terminal draws, and the rows it occupies. Built elsewhere: an
+	// escape sequence carrying a picture is text like any other.
+	Art     string
+	ArtRows int
 	// Interactive draws the cursor, the frame and the key hints. Without it
 	// the same model renders as a plain listing, which is what a pipe gets.
 	Interactive bool
@@ -78,7 +82,6 @@ const (
 	chromeLines = 5
 )
 
-// Bold, faint and reverse, written out rather than taken from a library.
 // Three escape sequences are not worth the modules a styling package costs
 // (ADR-009), and this package already owns every byte it emits.
 const (
@@ -110,8 +113,7 @@ func styled(attr, text string) string {
 func rule(width int) string { return strings.Repeat("─", width) }
 
 // fit makes a line exactly width cells. Padding matters as much as truncating:
-// the selected row is drawn in reverse, and a row that stops early is a
-// highlight that stops early.
+// a row that stops early is a reversed highlight that stops early.
 func fit(s string, width int) string {
 	if width <= 0 {
 		return ""
@@ -143,6 +145,14 @@ func Render(d Dashboard) string {
 		}
 		visible = max(1, height-chrome(d, width))
 	}
+
+	if rows := d.artRows(visible); rows > 0 {
+		b.WriteString(d.Art)
+		// The picture is drawn where the cursor sits and does not move it, so
+		// the rows it covers are stepped over by hand.
+		b.WriteString(strings.Repeat("\n", rows))
+		visible -= rows
+	}
 	b.WriteString(list(d, width, visible))
 
 	b.WriteString(styled(faint, rule(width)))
@@ -167,6 +177,23 @@ func chrome(d Dashboard, width int) int {
 		n += len(completions(d, width))
 	}
 	return n
+}
+
+// minRowsBesideArt is how much list has to remain for a picture to be worth
+// its rows. One row and a thumbnail is a thumbnail of something nobody can
+// scroll away from.
+const minRowsBesideArt = 4
+
+// artRows is how many rows the picture gets, which is none when there is not
+// enough screen to spare them.
+func (d Dashboard) artRows(visible int) int {
+	if d.Art == "" || d.ArtRows <= 0 {
+		return 0
+	}
+	if visible-d.ArtRows < minRowsBesideArt {
+		return 0
+	}
+	return d.ArtRows
 }
 
 // heading is what this screen is, after the program's name.
@@ -254,9 +281,8 @@ func followers(n int) string {
 	}
 }
 
-// sides puts one string at each end of a line. The left yields when there is
-// not room for both: a title cut short is still the title, and a channel name
-// cut short is a different channel.
+// sides puts one string at each end. The left yields: a title cut short is
+// still the title, a channel name cut short is a different channel.
 func sides(left, right string, width int) string {
 	const gap = 2
 
@@ -344,11 +370,9 @@ func hints(d Dashboard) string {
 	}
 }
 
-// completions lists what the line could still become, with a summary each.
-//
-// A command line that does not show what it accepts is a guessing game, and
-// the list is the half of the bargain that makes ADR-011's rule bearable: the
-// commands are few enough to print.
+// completions lists what the line could still become. A command line that does
+// not show what it accepts is a guessing game, and six commands are few enough
+// to print.
 func completions(d Dashboard, width int) []string {
 	matches := Matching(d.Line)
 	switch len(matches) {
@@ -371,9 +395,8 @@ func completions(d Dashboard, width int) []string {
 	return append(rows, strings.TrimRight(row, " "))
 }
 
-// spelled is a command as the completion list writes it, with what follows it
-// where there is something. A list of bare words says nothing about which of
-// them need typing after.
+// spelled is a command as the list writes it. Bare words say nothing about
+// which of them need typing after.
 func spelled(c Command) string {
 	if c.Argument == "" {
 		return c.Name
@@ -381,12 +404,9 @@ func spelled(c Command) string {
 	return c.Name + " <" + c.Argument + ">"
 }
 
-// marker is the cell before the title. Watched outranks new, and there is no
-// colour in it: the one thing a list must survive is being read on a terminal
-// that has none.
-//
-// A followed channel gets the same tick a watched video does. Both mean "you
-// already have this one", which is what the mark is for.
+// marker is the cell before the title. No colour in it: the one thing a list
+// must survive is being read on a terminal that has none. A followed channel
+// gets the same tick a watched video does — both mean "you have this one".
 func marker(r follow.Row) string {
 	switch {
 	case r.Watched, r.Followed:
@@ -398,9 +418,8 @@ func marker(r follow.Row) string {
 	}
 }
 
-// window is the slice of rows that fits, kept around the cursor. The list
-// moves under the cursor rather than jumping by a page: a row that was next to
-// the cursor before a keypress should be next to it after one.
+// window is the slice of rows that fits, kept around the cursor: a row next to
+// it before a keypress should be next to it after one.
 func window(selected, rows, visible int) (first, last int) {
 	if visible <= 0 || visible >= rows {
 		return 0, rows
@@ -426,7 +445,7 @@ func when(now time.Time, v media.Video) string {
 	return ""
 }
 
-// Length is a running time in the same fixed width the age column uses.
+// Length is a running time.
 func Length(d time.Duration) string {
 	if d < 0 {
 		return ""
@@ -456,9 +475,8 @@ func plural(n int, one, many string) string {
 	return fmt.Sprintf("%d %s", n, many)
 }
 
-// Ago is a duration a person reads at a glance, in a fixed width. Coarse on
-// purpose: "3 days ago" and "3 days and four hours ago" lead to the same
-// decision, and the second costs a column the title wants.
+// Ago is a duration read at a glance. Coarse on purpose: "3 days ago" and "3
+// days and four hours ago" lead to the same decision.
 func Ago(now, then time.Time) string {
 	d := now.Sub(then)
 	switch {
@@ -479,8 +497,8 @@ func Ago(now, then time.Time) string {
 	}
 }
 
-// pad truncates to width, counting runes, and marks that it did: a title cut
-// without a mark reads as the title the channel chose.
+// pad truncates to width, marking that it did: a title cut without a mark
+// reads as the title the channel chose.
 func pad(s string, width int) string {
 	r := []rune(s)
 	if len(r) <= width {

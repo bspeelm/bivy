@@ -179,7 +179,7 @@ quietly is how this stops being testable, so each names what disagrees with it.
 | `internal/mpv` | launch and drive mpv over an IPC socket |
 | `internal/follow` | follows and watch state, pure |
 | `internal/store` | atomic `0600` persistence |
-| `internal/graphics` | terminal capability probe, kitty-protocol image emit |
+| `internal/graphics` | terminal capability probe, kitty-protocol image emit. **Writes escape sequences derived from remote image bytes** |
 | `internal/tui` | dashboard, search, the command line, thumbnail grid |
 
 ### The dashboard needs no extractor
@@ -311,6 +311,8 @@ count above is the thing to watch — a fourth kind is a decision, not a detail.
   command line does not become the place features go to avoid §3.
 - **Fuzzing on the feed parser**, because it is the one place remote bytes are
   parsed.
+- **A test that a terminal which cannot draw is sent no graphics**, because
+  the bytes a terminal does not understand are the ones it prints.
 - **A table test on argument construction** for both external processes,
   covering option-shaped input. The extractor has an option that runs a shell
   command, so this is the one that matters.
@@ -356,7 +358,7 @@ executed.
 | 1 | **Follow and dashboard.** Add a channel, fetch feeds, show what is new since the last visit. No player yet. | ✅ a followed channel's new videos are listed on launch |
 | 2 | **Play.** mpv over IPC. | ✅ enter on a dashboard row plays it in an mpv window and marks it watched |
 | 3 | **Search.** Extractor-backed query into the same list model. | ✅ a query returns rows that play the same way |
-| 4 | **Thumbnails.** Capability probe, kitty-protocol grid, text-only fallback where the protocol is absent. | the grid renders where supported and degrades where not |
+| 4 | **Thumbnails.** Capability probe, kitty-protocol picture for the row under the cursor (ADR-012), text-only where the protocol is absent. | ✅ the picture renders where supported and nothing changes where not |
 
 Manual verification, once milestone 2 lands: launch on Linux and on macOS,
 confirm the dashboard renders, a row plays in an mpv window, and the home

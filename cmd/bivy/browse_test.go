@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bspeelm/bivy/internal/follow"
+	"github.com/bspeelm/bivy/internal/graphics"
 	"github.com/bspeelm/bivy/internal/media"
 	"github.com/bspeelm/bivy/internal/mpv"
 	"github.com/bspeelm/bivy/internal/term"
@@ -19,6 +21,7 @@ import (
 // fakeScreen is a terminal that draws into a buffer and takes its keypresses
 // from a script. internal/term proves the decoding; this proves the loop.
 type fakeScreen struct {
+	draws  graphics.Capability
 	keys   chan term.Press
 	resize chan struct{}
 
@@ -36,9 +39,10 @@ func newScreen() *fakeScreen {
 	return &fakeScreen{keys: make(chan term.Press, 64), resize: make(chan struct{}, 1)}
 }
 
-func (s *fakeScreen) Size() (int, int)         { return 80, 24 }
-func (s *fakeScreen) Keys() <-chan term.Press  { return s.keys }
-func (s *fakeScreen) Resized() <-chan struct{} { return s.resize }
+func (s *fakeScreen) Graphics() graphics.Capability { return s.draws }
+func (s *fakeScreen) Size() (int, int)              { return 80, 24 }
+func (s *fakeScreen) Keys() <-chan term.Press       { return s.keys }
+func (s *fakeScreen) Resized() <-chan struct{}      { return s.resize }
 
 func (s *fakeScreen) Draw(frame string) error {
 	s.mu.Lock()
@@ -112,6 +116,33 @@ func (p *fakePlayer) Play(v media.Video) error {
 	return nil
 }
 
+// fakeArt stands in for the network and the graphics protocol together.
+type fakeArt struct {
+	mu      sync.Mutex
+	fetched []string
+	fail    error
+}
+
+func (a *fakeArt) Fetch(_ context.Context, videoID string) ([]byte, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.fetched = append(a.fetched, videoID)
+	if a.fail != nil {
+		return nil, a.fail
+	}
+	return []byte("picture of " + videoID), nil
+}
+
+func (a *fakeArt) Draw(data []byte, cols, rows int) (string, error) {
+	return fmt.Sprintf("<art %dx%d %s>", cols, rows, data), nil
+}
+
+func (a *fakeArt) asked() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.fetched...)
+}
+
 func (p *fakePlayer) Events() <-chan mpv.Event { return p.events }
 
 func (p *fakePlayer) Close() error {
@@ -181,6 +212,7 @@ type browserHarness struct {
 	screen *fakeScreen
 	player *fakePlayer
 	finder *stubSearch
+	art    *fakeArt
 	done   chan int
 }
 
@@ -202,6 +234,7 @@ func newBrowser(t *testing.T) *browserHarness {
 				{ID: chanB, Title: "Bee", Description: "the other one", Followers: 12_400},
 			},
 		},
+		art:  &fakeArt{},
 		done: make(chan int, 1),
 	}
 	h.app.newPlayer = func(context.Context) (player, error) { return bh.player, nil }
@@ -1188,5 +1221,107 @@ func TestFollowingAHandleStillAsksTheFeed(t *testing.T) {
 
 	if after := len(b.feeds.asked()); after == before {
 		t.Error("following a handle made no request, so the name came from nowhere")
+	}
+}
+
+// A picture is fetched for the row somebody is looking at, and for no other.
+// A list of thirty rows is thirty pictures nobody asked for.
+func TestOnlyTheRowUnderTheCursorGetsAPicture(t *testing.T) {
+	b := newBrowser(t)
+	b.screen.draws = graphics.Kitty
+	b.app.art = b.art
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "<art 28x7 picture of aaaaaaaaaaa>")
+
+	if got := b.art.asked(); len(got) != 1 || got[0] != "aaaaaaaaaaa" {
+		t.Errorf("fetched %v, want only the row under the cursor", got)
+	}
+
+	b.screen.press(named(term.KeyDown))
+	b.eventually(t, "picture of ccccccccccc")
+	b.quit(t)
+
+	if got := len(b.art.asked()); got != 2 {
+		t.Errorf("%d pictures fetched after moving one row, want 2", got)
+	}
+}
+
+// Moving back to a row already seen costs nothing: the session keeps what it
+// fetched, in memory and nowhere else (ADR-007).
+func TestAPictureIsFetchedOnce(t *testing.T) {
+	b := newBrowser(t)
+	b.screen.draws = graphics.Kitty
+	b.app.art = b.art
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "picture of aaaaaaaaaaa")
+	b.screen.press(named(term.KeyDown))
+	b.eventually(t, "picture of ccccccccccc")
+	b.screen.press(named(term.KeyUp))
+	b.eventually(t, "picture of aaaaaaaaaaa")
+	b.quit(t)
+
+	if got := len(b.art.asked()); got != 2 {
+		t.Errorf("%d fetches for two rows visited twice, want 2", got)
+	}
+}
+
+// A terminal that cannot draw is the ordinary case, and nothing else about the
+// program changes.
+func TestATerminalThatCannotDrawGetsNoPictures(t *testing.T) {
+	b := newBrowser(t)
+	b.screen.draws = graphics.None
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.quit(t)
+
+	if got := b.art.asked(); len(got) != 0 {
+		t.Errorf("a terminal with no graphics fetched %v", got)
+	}
+	if strings.Contains(b.screen.last(), "\x1b_G") {
+		t.Error("a graphics sequence was sent to a terminal that cannot read one")
+	}
+}
+
+// A picture that will not arrive is not worth a word on screen: the row says
+// what the video is, and the thumbnail is a convenience.
+func TestAMissingPictureIsNotAnError(t *testing.T) {
+	b := newBrowser(t)
+	b.screen.draws = graphics.Kitty
+	b.art.fail = errors.New("404 Not Found")
+	b.app.art = b.art
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.quit(t)
+
+	if strings.Contains(b.screen.last(), "404") {
+		t.Errorf("a missing picture put an error on screen:\n%s", b.screen.last())
+	}
+}
+
+// A channel row has no video, so there is nothing to draw and nothing to ask
+// for.
+func TestAChannelRowHasNoPicture(t *testing.T) {
+	b := newBrowser(t)
+	b.screen.draws = graphics.Kitty
+	b.app.art = b.art
+
+	b.start(t)
+	b.eventually(t, "nothing followed yet")
+	b.screen.press(key(':'))
+	b.screen.typed("channels whatever")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "2 channels for")
+	b.quit(t)
+
+	if got := b.art.asked(); len(got) != 0 {
+		t.Errorf("a list of channels fetched %v", got)
 	}
 }

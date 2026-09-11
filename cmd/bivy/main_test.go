@@ -81,6 +81,15 @@ func (s *stubFeeds) asked() []string {
 	return append([]string(nil), s.fetched...)
 }
 
+func (s *stubFeeds) Thumbnail(_ context.Context, videoID string) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failWith != nil {
+		return nil, s.failWith
+	}
+	return []byte("picture of " + videoID), nil
+}
+
 func (s *stubFeeds) Resolve(_ context.Context, handle string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

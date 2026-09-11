@@ -27,6 +27,10 @@ const (
 	// A channel page is HTML meant for a browser and is genuinely large.
 	maxPageBytes = 8 << 20
 
+	// A thumbnail is tens of kilobytes. The cap is what stops a picture being
+	// a way to make bivy hold as much memory as a server cares to send.
+	maxImageBytes = 2 << 20
+
 	// bivy identifies the program, never the person. There is no version of
 	// this string that varies per install, per machine, or per run.
 	userAgent = "bivy (+https://github.com/bspeelm/bivy)"
@@ -126,6 +130,22 @@ var channelIDIn = []*regexp.Regexp{
 }
 
 var handleShape = regexp.MustCompile(`^@[A-Za-z0-9._-]{1,60}$`)
+
+// Thumbnail fetches a video's picture. Here rather than in the package that
+// draws it, because this is the only package that may import net/http (§0).
+// The address is derived from the identifier, never taken from a feed, so a
+// hostile feed cannot aim this request.
+func (c *Client) Thumbnail(ctx context.Context, videoID string) ([]byte, error) {
+	target := media.ThumbnailURL(videoID)
+	if target == "" {
+		return nil, fmt.Errorf("%q is not a video identifier", videoID)
+	}
+	body, err := c.get(ctx, target, maxImageBytes)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(body), nil
+}
 
 // Resolve turns a handle into the channel identifier its feed is keyed by. The
 // one request bivy makes for a page meant for a browser (ADR-008): it happens

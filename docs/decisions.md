@@ -378,3 +378,49 @@ the keyboard is worse than one that can be left by accident.
 **What would reopen this:** nothing. The question was whether to have one; it
 is answered. Whether a particular command should exist is answered by the rule
 above, in the pull request that proposes it.
+
+---
+
+## ADR-012 — One picture, for the row under the cursor, rather than a grid of them
+
+**Status:** accepted, milestone 4. This narrows what §12 said that milestone
+would be.
+
+The plan said milestone 4 was a thumbnail grid, and the thing bivy was first
+described against shows one. A grid is refused, and what is built instead is a
+single picture above the list, for whatever the cursor is on.
+
+### The argument for the grid
+
+It is what was asked for, and it is the part of this program that is unlike
+reading a list of titles: a wall of thumbnails is how anyone actually picks a
+video, because a title is a worse description of a video than a frame of it.
+
+### What answers it
+
+The list came first and was chosen deliberately. The frame this program now
+draws — a title, a rule, a list with the cursor in reverse, a status line, keys
+on the bottom row — is a list at every point, and every key means what it means
+because there is a row under a cursor. A grid is a different program: two
+dimensions of movement, a different notion of what is selected, and a screen
+that has no room for a list beside it.
+
+Having both is worse than having either. Two screens with different navigation
+in a program with four keys is the kind of thing a command line gets added to
+paper over, and ADR-011 exists to stop that.
+
+The cheaper argument is bandwidth, and it is not the reason but it is real: a
+picture is tens of kilobytes of base64 down a pseudo-terminal, and a grid is
+that times twenty, re-sent on every scroll. One picture is fetched for the row
+somebody is looking at, and a list of thirty rows is not thirty requests
+nobody asked for.
+
+### What is kept
+
+Everything the grid was for, except the wall: the picture is the size of a
+real thumbnail, it changes as the cursor moves, and it is drawn by the
+protocol rather than approximated in text.
+
+**What would reopen this:** a second screen, entered deliberately and left
+deliberately, that is a grid and nothing else — not a mode the list grows into.
+That is a design worth having, and it is not this milestone.

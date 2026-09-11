@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/bspeelm/bivy/internal/follow"
+	"github.com/bspeelm/bivy/internal/graphics"
 	"github.com/bspeelm/bivy/internal/media"
 	"github.com/bspeelm/bivy/internal/mpv"
 	"github.com/bspeelm/bivy/internal/term"
@@ -30,8 +31,29 @@ type player interface {
 	Close() error
 }
 
+// artist is what the browser needs to put a picture on screen. A terminal that
+// cannot draw simply has none.
+type artist interface {
+	// Fetch returns a video's picture as the bytes a server sent.
+	Fetch(ctx context.Context, videoID string) ([]byte, error)
+	// Draw turns those bytes into what the terminal understands.
+	Draw(data []byte, cols, rows int) (string, error)
+}
+
+// pictures is the real artist: feed fetches, graphics draws.
+type pictures struct{ feeds fetcher }
+
+func (p pictures) Fetch(ctx context.Context, videoID string) ([]byte, error) {
+	return p.feeds.Thumbnail(ctx, videoID)
+}
+
+func (p pictures) Draw(data []byte, cols, rows int) (string, error) {
+	return graphics.Render(data, cols, rows)
+}
+
 // screen is what the browser needs from a terminal.
 type screen interface {
+	Graphics() graphics.Capability
 	Size() (width, height int)
 	Draw(frame string) error
 	Keys() <-chan term.Press
@@ -66,6 +88,13 @@ type browser struct {
 	// be attributed to something. mpv reports that a file ended, not which.
 	playing media.Video
 
+	// art is the picture for the row under the cursor; pictures is what this
+	// session has fetched. In memory and nowhere else — a thumbnail cache on
+	// disk is a viewing history in image form (ADR-007).
+	art      string
+	pictures map[string][]byte
+	drawn    string
+
 	// query is what was searched for, empty on the dashboard; channels means
 	// those results are channels. line is what has been typed into the
 	// command line, and typing means it has the keyboard.
@@ -88,6 +117,10 @@ func (a *app) browse(ctx context.Context) int {
 	}
 	if err != nil {
 		return a.fail(err)
+	}
+
+	if sc.Graphics() == graphics.Kitty {
+		a.art = pictures{feeds: a.feeds}
 	}
 
 	b := &browser{app: a, screen: sc}
@@ -588,9 +621,74 @@ func (b *browser) failedNow() []string {
 	return b.failed
 }
 
+// The box a thumbnail is drawn into, in cells: wide enough to be a picture
+// rather than a stamp, short enough to leave a list.
+const (
+	artCols = 28
+	artRows = 7
+)
+
+// picture is the drawn thumbnail for the row under the cursor, or nothing.
+// What is worth a request is what somebody is looking at: a list of thirty
+// rows is thirty pictures nobody asked for.
+func (b *browser) picture(ctx context.Context) string {
+	if b.app.art == nil || b.selected >= len(b.rows) {
+		return ""
+	}
+	id := b.rows[b.selected].Video.ID
+	if id == "" {
+		return ""
+	}
+	if id == b.drawn {
+		return b.art
+	}
+
+	data, held := b.pictures[id]
+	if !held {
+		var err error
+		if data, err = b.app.art.Fetch(ctx, id); err != nil {
+			// Not worth a word on screen: the row says what the video is.
+			b.drawn, b.art = id, ""
+			return ""
+		}
+		b.remember(id, data)
+	}
+
+	drawn, err := b.app.art.Draw(data, artCols, artRows)
+	if err != nil {
+		drawn = ""
+	}
+	b.drawn, b.art = id, drawn
+	return drawn
+}
+
+// picturesHeld bounds what a session keeps: "small and short" is not a
+// limit.
+const picturesHeld = 60
+
+// remember keeps a picture for the session, forgetting an arbitrary one once
+// there are too many — arbitrary because each is equally cheap to fetch
+// again.
+func (b *browser) remember(id string, data []byte) {
+	if b.pictures == nil {
+		// So a browser never handed one is short of a cache, not of a map.
+		b.pictures = map[string][]byte{}
+	}
+	for len(b.pictures) >= picturesHeld {
+		for old := range b.pictures {
+			delete(b.pictures, old)
+			break
+		}
+	}
+	b.pictures[id] = data
+}
+
 func (b *browser) draw() error {
 	width, height := b.screen.Size()
+	art := b.picture(context.Background())
 	return b.screen.Draw(tui.Render(tui.Dashboard{
+		Art:         art,
+		ArtRows:     artRows,
 		Rows:        b.rows,
 		Failed:      b.failedNow(),
 		Now:         b.app.now(),

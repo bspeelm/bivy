@@ -96,11 +96,18 @@ the screen you were reading.
 A command exists because it takes an argument or because it is rare; anything
 else is a key. That rule is ADR-011 and it is what keeps the list short.
 
-## Still to come
+## Thumbnails
 
-| | |
-|---|---|
-| **Thumbnails** | rendered in the terminal where the graphics protocol is available, with bivy saying so plainly where it is not. |
+Where your terminal speaks the kitty graphics protocol, the row under the
+cursor gets its thumbnail above the list. bivy asks the terminal whether it can
+draw rather than guessing from `$TERM`, so moving between terminals is not
+something you have to configure — and where the answer is no, nothing changes
+and no stray bytes are printed.
+
+Pictures are fetched only for the row you are looking at, kept in memory for
+the session, and written nowhere. There is no thumbnail cache, because a
+thumbnail cache is a viewing history in image form in a directory you did not
+create.
 
 ## What it will not do
 

@@ -43,6 +43,7 @@ const dashboardRows = 30
 type fetcher interface {
 	Fetch(ctx context.Context, channelID string) (media.Channel, error)
 	Resolve(ctx context.Context, handle string) (string, error)
+	Thumbnail(ctx context.Context, videoID string) ([]byte, error)
 }
 
 type app struct {
@@ -60,6 +61,9 @@ type app struct {
 	// search runs the extractor, which is likewise not something a test may
 	// require to be installed.
 	search searcher
+	// art fetches and draws thumbnails, and is nil where the terminal cannot
+	// draw. Nothing else in the program changes when it is.
+	art artist
 }
 
 func main() {
