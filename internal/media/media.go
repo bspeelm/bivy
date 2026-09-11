@@ -12,19 +12,32 @@ import (
 	"unicode"
 )
 
-// Video is one entry from a channel's feed.
+// Video is one thing that can be watched, however bivy heard about it. A feed
+// entry carries a publish time and no duration, a search result the reverse;
+// both are optional here rather than faked.
 type Video struct {
 	ID        string
 	Title     string
 	Author    string
 	ChannelID string
 	Published time.Time
+	Duration  time.Duration
 	Thumbnail string
 }
 
 // URL is derived rather than stored: a URL that arrived from a feed is a URL a
 // feed chose, and this one is built from an identifier that has been checked.
 func (v Video) URL() string { return "https://www.youtube.com/watch?v=" + v.ID }
+
+// ThumbnailURL is derived from the identifier rather than taken from whatever
+// supplied the entry, so that a hostile feed or extractor cannot aim the fetch
+// at a host of its choosing.
+func ThumbnailURL(videoID string) string {
+	if !IsVideoID(videoID) {
+		return ""
+	}
+	return "https://i.ytimg.com/vi/" + videoID + "/hqdefault.jpg"
+}
 
 // Channel is a followed channel and the entries its feed currently carries.
 type Channel struct {
@@ -73,10 +86,8 @@ func Text(s string) string {
 }
 
 // IsChannelID reports whether s is shaped like a channel identifier: two
-// leading letters and 22 characters of base64url.
-//
-// Checked rather than trusted because this string is interpolated into a URL
-// and, in a later milestone, travels towards an argv.
+// leading letters and 22 characters of base64url. Checked rather than trusted
+// because it is interpolated into a URL and travels towards an argv.
 func IsChannelID(s string) bool {
 	const width = 24
 	if len(s) != width || !strings.HasPrefix(s, "UC") {

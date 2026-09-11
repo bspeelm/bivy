@@ -6,13 +6,20 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/bspeelm/bivy/internal/follow"
 	"github.com/bspeelm/bivy/internal/media"
 	"github.com/bspeelm/bivy/internal/mpv"
 	"github.com/bspeelm/bivy/internal/term"
 	"github.com/bspeelm/bivy/internal/tui"
+	"github.com/bspeelm/bivy/internal/ytdlp"
 )
+
+// queryLimit is what the search box will hold. The extractor refuses more, and
+// a box that silently keeps taking characters it will then reject is worse
+// than one that stops.
+const queryLimit = 200
 
 // player is what the browser needs from mpv, named here so the loop can be
 // tested without one. A stand-in for the stand-in: internal/mpv proves the
@@ -27,9 +34,15 @@ type player interface {
 type screen interface {
 	Size() (width, height int)
 	Draw(frame string) error
-	Keys() <-chan term.Key
+	Keys() <-chan term.Press
 	Resized() <-chan struct{}
 	Close() error
+}
+
+// searcher is what the browser needs from the extractor, named here so the
+// loop is testable without one installed.
+type searcher interface {
+	Search(ctx context.Context, query string, limit int) ([]media.Video, error)
 }
 
 // browser is one interactive session: a list, a cursor, and at most one mpv.
@@ -51,6 +64,14 @@ type browser struct {
 	// playing is what was last handed to mpv, so that the end-file event can
 	// be attributed to something. mpv reports that a file ended, not which.
 	playing media.Video
+
+	// query is what was searched for, empty on the dashboard. typing means
+	// the search box has the keyboard.
+	query  string
+	typing bool
+	// dashboard keeps the rows the search replaced, so escape can put them
+	// back without fetching every feed again.
+	dashboard []follow.Row
 }
 
 // browse runs the dashboard until the user quits.
@@ -100,11 +121,11 @@ func (b *browser) run(ctx context.Context) int {
 		case <-ctx.Done():
 			return 0
 
-		case key, open := <-b.screen.Keys():
+		case press, open := <-b.screen.Keys():
 			if !open {
 				return 0
 			}
-			if b.handle(ctx, key) {
+			if b.handle(ctx, press) {
 				return 0
 			}
 
@@ -126,29 +147,132 @@ func (b *browser) run(ctx context.Context) int {
 	}
 }
 
-// handle applies one keypress, reporting whether the session is over.
-func (b *browser) handle(ctx context.Context, key term.Key) (done bool) {
-	switch key {
-	case term.KeyQuit:
+// handle applies one keypress, reporting whether the session is over. What a
+// character means depends on which screen is in front of the user: the
+// terminal reports "j" and this decides whether that is "down" or a letter.
+func (b *browser) handle(ctx context.Context, press term.Press) (done bool) {
+	if b.typing {
+		return b.handleTyping(ctx, press)
+	}
+
+	switch press.Key {
+	case term.KeyInterrupt:
 		return true
 	case term.KeyDown:
 		b.selected = tui.Move(b.selected, 1, len(b.rows))
 	case term.KeyUp:
 		b.selected = tui.Move(b.selected, -1, len(b.rows))
-	case term.KeyTop:
+	case term.KeyHome:
 		b.selected = tui.Move(b.selected, -len(b.rows), len(b.rows))
-	case term.KeyBottom:
+	case term.KeyEnd:
 		b.selected = tui.Move(b.selected, len(b.rows), len(b.rows))
-	case term.KeyRefresh:
+	case term.KeyEnter:
+		b.play(ctx)
+	case term.KeyEscape:
+		b.leaveResults()
+	case term.KeyRune:
+		return b.handleRune(ctx, press.Rune)
+	}
+	return false
+}
+
+func (b *browser) handleRune(ctx context.Context, r rune) (done bool) {
+	switch r {
+	case 'q':
+		return true
+	case 'j':
+		b.selected = tui.Move(b.selected, 1, len(b.rows))
+	case 'k':
+		b.selected = tui.Move(b.selected, -1, len(b.rows))
+	case 'g':
+		b.selected = tui.Move(b.selected, -len(b.rows), len(b.rows))
+	case 'G':
+		b.selected = tui.Move(b.selected, len(b.rows), len(b.rows))
+	case ' ':
+		b.play(ctx)
+	case '/':
+		b.typing, b.query, b.status = true, "", ""
+	case 'r':
+		if b.query != "" {
+			// Refreshing a result set means asking the same question again,
+			// not throwing the results away for a dashboard.
+			b.runSearch(ctx, b.query)
+			return false
+		}
 		b.status = "refreshing…"
 		_ = b.draw()
 		if err := b.load(ctx); err != nil {
 			b.status = err.Error()
 		}
-	case term.KeyEnter:
-		b.play(ctx)
 	}
 	return false
+}
+
+// handleTyping is the search box, where every printable character is a
+// character — including the ones that are commands on the list behind it.
+func (b *browser) handleTyping(ctx context.Context, press term.Press) (done bool) {
+	switch press.Key {
+	case term.KeyInterrupt:
+		return true
+	case term.KeyEscape:
+		b.typing = false
+		b.query = ""
+	case term.KeyBackspace:
+		if r := []rune(b.query); len(r) > 0 {
+			b.query = string(r[:len(r)-1])
+		}
+	case term.KeyEnter:
+		b.typing = false
+		if strings.TrimSpace(b.query) == "" {
+			b.leaveResults()
+			return false
+		}
+		b.runSearch(ctx, b.query)
+	case term.KeyRune:
+		if len(b.query) < queryLimit {
+			b.query += string(press.Rune)
+		}
+	}
+	return false
+}
+
+// runSearch replaces the rows with results, keeping the dashboard to come back
+// to.
+func (b *browser) runSearch(ctx context.Context, query string) {
+	if b.dashboard == nil {
+		b.dashboard = b.rows
+	}
+	b.query = query
+	b.status = "searching…"
+	b.rows, b.selected = nil, 0
+	_ = b.draw()
+
+	results, err := b.app.search.Search(ctx, query, dashboardRows)
+	if err != nil {
+		b.status = searchTrouble(err)
+		return
+	}
+
+	b.status = ""
+	b.rows = follow.Results(b.state, results)
+}
+
+// leaveResults puts the dashboard back.
+func (b *browser) leaveResults() {
+	if b.query == "" {
+		return
+	}
+	b.query, b.status = "", ""
+	b.rows, b.dashboard = b.dashboard, nil
+	b.selected = tui.Move(0, 0, len(b.rows))
+}
+
+// searchTrouble says what to do about a search that did not happen.
+func searchTrouble(err error) string {
+	if errors.Is(err, ytdlp.ErrNotInstalled) {
+		return "yt-dlp is not installed, and search needs it — the dashboard does not"
+	}
+	return "search failed: " + err.Error()
 }
 
 // play hands the selected row to mpv, starting one if there is not one yet.
@@ -223,6 +347,8 @@ func (b *browser) load(ctx context.Context) error {
 	}
 
 	b.state, b.fetched, b.failed = state, fetched, failed
+	b.dashboard = nil
+	b.query = ""
 	b.rows = follow.Dashboard(state, fetched, dashboardRows)
 	b.selected = tui.Move(b.selected, 0, len(b.rows))
 	if b.status == "refreshing…" {
@@ -231,16 +357,27 @@ func (b *browser) load(ctx context.Context) error {
 	return nil
 }
 
+// failedNow reports unreachable channels only where they are relevant. A
+// search result set is not short because a feed was down.
+func (b *browser) failedNow() []string {
+	if b.query != "" {
+		return nil
+	}
+	return b.failed
+}
+
 func (b *browser) draw() error {
 	width, height := b.screen.Size()
 	return b.screen.Draw(tui.Render(tui.Dashboard{
 		Rows:        b.rows,
-		Failed:      b.failed,
+		Failed:      b.failedNow(),
 		Now:         b.app.now(),
 		Width:       width,
 		Height:      height,
 		Selected:    b.selected,
 		Status:      b.status,
+		Query:       b.query,
+		Typing:      b.typing,
 		Interactive: true,
 	}))
 }

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bspeelm/bivy/internal/follow"
+	"github.com/bspeelm/bivy/internal/media"
 )
 
 // Move returns the row the cursor lands on, clamped to the list. Here rather
@@ -56,6 +57,12 @@ type Dashboard struct {
 	// Interactive draws the cursor and the key hints. Without it the same
 	// model renders as a plain listing, which is what a pipe gets.
 	Interactive bool
+	// Query is what is being searched for. Non-empty means the rows are
+	// results rather than the dashboard.
+	Query string
+	// Typing means the search box has the keyboard, so the headline is a
+	// prompt and the hints change.
+	Typing bool
 }
 
 const (
@@ -69,7 +76,30 @@ const (
 	chrome = 4
 )
 
-const keyHints = "  ↑↓ move · enter play · r refresh · q quit"
+const (
+	keyHints    = "  ↑↓ move · enter play · / search · r refresh · q quit"
+	searchHints = "  enter search · esc cancel"
+	resultHints = "  ↑↓ move · enter play · / search again · esc back · q quit"
+	emptyHints  = "  / search · r refresh · q quit"
+	noResults   = "  / search again · esc back · q quit"
+)
+
+// hints names only the keys that would do something. The hint line is the one
+// part of the screen a new user reads as instructions.
+func hints(d Dashboard) string {
+	switch {
+	case d.Typing:
+		return searchHints
+	case len(d.Rows) == 0 && d.Query != "":
+		return noResults
+	case len(d.Rows) == 0:
+		return emptyHints
+	case d.Query != "":
+		return resultHints
+	default:
+		return keyHints
+	}
+}
 
 // Render returns the dashboard as text, newline-terminated, ready to print.
 func Render(d Dashboard) string {
@@ -89,12 +119,23 @@ func Render(d Dashboard) string {
 		}
 	}
 
-	b.WriteString(headline(len(d.Rows), newCount))
+	b.WriteString(pad(headline(d, newCount), width))
 	b.WriteString("\n\n")
 
+	if d.Typing {
+		b.WriteString(footer(d, width, 0, 0))
+		return b.String()
+	}
+
 	if len(d.Rows) == 0 && len(d.Failed) == 0 {
+		if d.Query != "" {
+			fmt.Fprintf(&b, "  Nothing found for %s\n", pad(d.Query, width-20))
+			b.WriteString(footer(d, width, 0, 0))
+			return b.String()
+		}
 		b.WriteString("  Nothing to show. Follow a channel:\n\n")
 		b.WriteString("      bivy follow @handle\n")
+		b.WriteString(footer(d, width, 0, 0))
 		return b.String()
 	}
 
@@ -110,13 +151,13 @@ func Render(d Dashboard) string {
 		}
 		if chanWidth == 0 {
 			fmt.Fprintf(&b, "%s%s %-*s %s\n",
-				cursor, marker(r), agoWidth, Ago(d.Now, r.Video.Published),
+				cursor, marker(r), agoWidth, when(d.Now, r.Video),
 				pad(r.Video.Title, titleWidth))
 			continue
 		}
 		fmt.Fprintf(&b, "%s%s %-*s %-*s %s\n",
 			cursor, marker(r),
-			agoWidth, Ago(d.Now, r.Video.Published),
+			agoWidth, when(d.Now, r.Video),
 			chanWidth, pad(r.Channel, chanWidth),
 			pad(r.Video.Title, titleWidth),
 		)
@@ -188,7 +229,9 @@ func window(selected, rows, height int) (first, last int) {
 
 func footer(d Dashboard, width, first, last int) string {
 	var lines []string
-	if first > 0 || last < len(d.Rows) {
+	// Only when a window is actually being shown. Typing draws no rows at
+	// all, and "showing 1-0 of 5" is arithmetic rather than information.
+	if last > first && (first > 0 || last < len(d.Rows)) {
 		lines = append(lines, fmt.Sprintf("  showing %d-%d of %d", first+1, last, len(d.Rows)))
 	}
 	if len(d.Failed) > 0 {
@@ -200,7 +243,7 @@ func footer(d Dashboard, width, first, last int) string {
 		lines = append(lines, "  "+d.Status)
 	}
 	if d.Interactive {
-		lines = append(lines, keyHints)
+		lines = append(lines, hints(d))
 	}
 	if len(lines) == 0 {
 		return ""
@@ -215,15 +258,56 @@ func footer(d Dashboard, width, first, last int) string {
 	return b.String()
 }
 
-func headline(rows, fresh int) string {
+func headline(d Dashboard, fresh int) string {
 	switch {
-	case rows == 0:
+	case d.Typing:
+		return "search: " + d.Query + "_"
+	case d.Query != "":
+		return fmt.Sprintf("bivy · %s for %s", plural(len(d.Rows), "result", "results"), d.Query)
+	case len(d.Rows) == 0:
 		return "bivy"
 	case fresh == 0:
 		return fmt.Sprintf("bivy · %s, nothing new since your last visit",
-			plural(rows, "video", "videos"))
+			plural(len(d.Rows), "video", "videos"))
 	default:
 		return fmt.Sprintf("bivy · %s since your last visit", plural(fresh, "new video", "new videos"))
+	}
+}
+
+// when is the second column. A feed entry carries a publish time and no
+// duration, a search result the reverse, and the column shows whichever is
+// known — a search result with no date would otherwise read as fifty years
+// old.
+func when(now time.Time, v media.Video) string {
+	if !v.Published.IsZero() {
+		return Ago(now, v.Published)
+	}
+	if v.Duration > 0 {
+		return Length(v.Duration)
+	}
+	return ""
+}
+
+// Length is a running time in the same fixed width the age column uses.
+func Length(d time.Duration) string {
+	if d < 0 {
+		return ""
+	}
+	total := int(d.Round(time.Second).Seconds())
+	hours, minutes, seconds := total/3600, (total/60)%60, total%60
+
+	switch {
+	case hours >= 1000:
+		return "999h+"
+	case hours >= 10:
+		// Seconds stop being information at this length, and the column is
+		// seven wide: "12:34:56" is eight and takes a character off every
+		// title on the screen.
+		return fmt.Sprintf("%dh", hours)
+	case hours > 0:
+		return fmt.Sprintf("%d:%02d:%02d", hours, minutes, seconds)
+	default:
+		return fmt.Sprintf("%d:%02d", minutes, seconds)
 	}
 }
 

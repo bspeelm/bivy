@@ -197,6 +197,23 @@ func Dashboard(s State, fetched []media.Channel, limit int) []Row {
 	return rows
 }
 
+// Results turns search results into rows.
+//
+// Nothing is new here: "new" means "since you last looked at this channel",
+// and a search is not a channel. Watched still applies, because whether you
+// have seen something is true however you found it.
+func Results(s State, videos []media.Video) []Row {
+	rows := make([]Row, 0, len(videos))
+	for _, v := range videos {
+		rows = append(rows, Row{
+			Video:   v,
+			Channel: v.Author,
+			Watched: s.HasWatched(v.ID),
+		})
+	}
+	return rows
+}
+
 // Visited records that the dashboard has been shown, so its entries are not
 // new next time. Only channels that were actually fetched are advanced: a
 // network blip must not silently consume what the user launched bivy to see.

@@ -13,12 +13,13 @@ import (
 	"github.com/bspeelm/bivy/internal/media"
 	"github.com/bspeelm/bivy/internal/mpv"
 	"github.com/bspeelm/bivy/internal/term"
+	"github.com/bspeelm/bivy/internal/ytdlp"
 )
 
 // fakeScreen is a terminal that draws into a buffer and takes its keypresses
 // from a script. internal/term proves the decoding; this proves the loop.
 type fakeScreen struct {
-	keys   chan term.Key
+	keys   chan term.Press
 	resize chan struct{}
 
 	mu     sync.Mutex
@@ -26,12 +27,17 @@ type fakeScreen struct {
 	closed bool
 }
 
+// key is one character pressed; named is one of the keys that is not a
+// character.
+func key(r rune) term.Press       { return term.Press{Key: term.KeyRune, Rune: r} }
+func named(k term.Key) term.Press { return term.Press{Key: k} }
+
 func newScreen() *fakeScreen {
-	return &fakeScreen{keys: make(chan term.Key, 16), resize: make(chan struct{}, 1)}
+	return &fakeScreen{keys: make(chan term.Press, 64), resize: make(chan struct{}, 1)}
 }
 
 func (s *fakeScreen) Size() (int, int)         { return 80, 24 }
-func (s *fakeScreen) Keys() <-chan term.Key    { return s.keys }
+func (s *fakeScreen) Keys() <-chan term.Press  { return s.keys }
 func (s *fakeScreen) Resized() <-chan struct{} { return s.resize }
 
 func (s *fakeScreen) Draw(frame string) error {
@@ -69,9 +75,16 @@ func (s *fakeScreen) wasClosed() bool {
 	return s.closed
 }
 
-func (s *fakeScreen) press(keys ...term.Key) {
+func (s *fakeScreen) press(keys ...term.Press) {
 	for _, k := range keys {
 		s.keys <- k
+	}
+}
+
+// typed is what a person typing into the search box produces.
+func (s *fakeScreen) typed(text string) {
+	for _, r := range text {
+		s.keys <- term.Press{Key: term.KeyRune, Rune: r}
 	}
 }
 
@@ -120,11 +133,43 @@ func (p *fakePlayer) wasClosed() bool {
 	return p.closed
 }
 
+// stubSearch stands in for the extractor, which a test may not require to be
+// installed.
+type stubSearch struct {
+	mu      sync.Mutex
+	results []media.Video
+	err     error
+	asked   []string
+}
+
+func (s *stubSearch) Search(_ context.Context, query string, _ int) ([]media.Video, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.asked = append(s.asked, query)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.results, nil
+}
+
+func (s *stubSearch) queries() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.asked...)
+}
+
+func (s *stubSearch) fail(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
+}
+
 // browserHarness is a session with both ends faked.
 type browserHarness struct {
 	*harness
 	screen *fakeScreen
 	player *fakePlayer
+	finder *stubSearch
 	done   chan int
 }
 
@@ -136,9 +181,14 @@ func newBrowser(t *testing.T) *browserHarness {
 		harness: h,
 		screen:  newScreen(),
 		player:  newPlayer(),
-		done:    make(chan int, 1),
+		finder: &stubSearch{results: []media.Video{
+			{ID: "sssssssssss", Title: "A Search Result", Author: "Someone", Duration: 89 * time.Second},
+			{ID: "ttttttttttt", Title: "Another Result", Author: "Someone Else", Duration: 3 * time.Minute},
+		}},
+		done: make(chan int, 1),
 	}
 	h.app.newPlayer = func(context.Context) (player, error) { return bh.player, nil }
+	h.app.search = bh.finder
 	return bh
 }
 
@@ -155,9 +205,11 @@ func (b *browserHarness) start(t *testing.T) *browser {
 	return br
 }
 
+// quit ends the session with ctrl-c, which works from the list and from the
+// search box alike. "q" is a letter in the box, and that is the point of it.
 func (b *browserHarness) quit(t *testing.T) {
 	t.Helper()
-	b.screen.press(term.KeyQuit)
+	b.screen.press(named(term.KeyInterrupt))
 	select {
 	case <-b.done:
 	case <-time.After(5 * time.Second):
@@ -205,7 +257,7 @@ func TestEnterPlaysTheSelectedRow(t *testing.T) {
 
 	// The second row, so this proves the cursor is consulted rather than the
 	// first row being played whatever is selected.
-	b.screen.press(term.KeyDown, term.KeyEnter)
+	b.screen.press(named(term.KeyDown), named(term.KeyEnter))
 	b.eventually(t, "playing · An older thing")
 
 	played := b.player.watched()
@@ -231,7 +283,7 @@ func TestAVideoIsMarkedWatchedWhenItReachesItsEnd(t *testing.T) {
 
 	br := b.start(t)
 	b.eventually(t, "The newest thing")
-	b.screen.press(term.KeyEnter)
+	b.screen.press(named(term.KeyEnter))
 	b.eventually(t, "playing ·")
 
 	// Still not watched: it is only playing.
@@ -265,7 +317,7 @@ func TestAVideoThatWasStoppedIsNotMarkedWatched(t *testing.T) {
 
 	br := b.start(t)
 	b.eventually(t, "The newest thing")
-	b.screen.press(term.KeyEnter)
+	b.screen.press(named(term.KeyEnter))
 	b.eventually(t, "playing ·")
 
 	b.player.events <- mpv.Event{Name: "end-file", Reason: "quit"}
@@ -291,9 +343,9 @@ func TestASecondVideoReusesTheSamePlayer(t *testing.T) {
 
 	b.start(t)
 	b.eventually(t, "The newest thing")
-	b.screen.press(term.KeyEnter)
+	b.screen.press(named(term.KeyEnter))
 	b.eventually(t, "playing ·")
-	b.screen.press(term.KeyDown, term.KeyEnter)
+	b.screen.press(named(term.KeyDown), named(term.KeyEnter))
 	b.eventually(t, "playing · An older thing")
 	b.quit(t)
 
@@ -316,7 +368,7 @@ func TestAMissingPlayerSaysWhatIsWrong(t *testing.T) {
 
 	b.start(t)
 	b.eventually(t, "The newest thing")
-	b.screen.press(term.KeyEnter)
+	b.screen.press(named(term.KeyEnter))
 	b.eventually(t, "mpv is not installed")
 	b.eventually(t, mpv.Minimum)
 	b.quit(t)
@@ -329,7 +381,7 @@ func TestARefusedPlayIsReportedOnScreen(t *testing.T) {
 
 	b.start(t)
 	b.eventually(t, "The newest thing")
-	b.screen.press(term.KeyEnter)
+	b.screen.press(named(term.KeyEnter))
 	b.eventually(t, "unsupported format")
 	b.quit(t)
 }
@@ -350,11 +402,11 @@ func TestAPlayerThatDiesIsNotReusedAfterwards(t *testing.T) {
 
 	b.start(t)
 	b.eventually(t, "The newest thing")
-	b.screen.press(term.KeyEnter)
+	b.screen.press(named(term.KeyEnter))
 	b.eventually(t, "playing ·")
 
 	close(players[0].events)
-	b.screen.press(term.KeyEnter)
+	b.screen.press(named(term.KeyEnter))
 	b.eventually(t, "playing ·")
 	b.quit(t)
 
@@ -376,7 +428,7 @@ func TestAVideoThatWouldNotPlaySaysSo(t *testing.T) {
 
 	br := b.start(t)
 	b.eventually(t, "The newest thing")
-	b.screen.press(term.KeyEnter)
+	b.screen.press(named(term.KeyEnter))
 	b.eventually(t, "playing ·")
 
 	b.player.events <- mpv.Event{
@@ -400,7 +452,7 @@ func TestAFailureWithNoDetailStillSaysSomething(t *testing.T) {
 
 	b.start(t)
 	b.eventually(t, "The newest thing")
-	b.screen.press(term.KeyEnter)
+	b.screen.press(named(term.KeyEnter))
 	b.eventually(t, "playing ·")
 
 	b.player.events <- mpv.Event{Name: "end-file", Reason: "error"}
@@ -415,9 +467,9 @@ func TestTheCursorStopsAtTheEnds(t *testing.T) {
 	br := b.start(t)
 	b.eventually(t, "The newest thing")
 
-	b.screen.press(term.KeyUp, term.KeyUp, term.KeyUp)
+	b.screen.press(named(term.KeyUp), named(term.KeyUp), named(term.KeyUp))
 	b.eventually(t, "> ")
-	b.screen.press(term.KeyBottom, term.KeyDown, term.KeyDown)
+	b.screen.press(named(term.KeyEnd), named(term.KeyDown), named(term.KeyDown))
 	b.eventually(t, "> ")
 	b.quit(t)
 
@@ -437,7 +489,7 @@ func TestRefreshRefetches(t *testing.T) {
 		{ID: "ddddddddddd", Title: "Posted while bivy was open", Published: at(11)},
 	}})
 
-	b.screen.press(term.KeyRefresh)
+	b.screen.press(key('r'))
 	b.eventually(t, "Posted while bivy was open")
 	b.quit(t)
 }
@@ -469,10 +521,281 @@ func TestPlayingWithAnEmptyDashboard(t *testing.T) {
 
 	b.start(t)
 	b.eventually(t, "Nothing to show")
-	b.screen.press(term.KeyEnter, term.KeyDown, term.KeyEnter)
+	b.screen.press(named(term.KeyEnter), named(term.KeyDown), named(term.KeyEnter))
 	b.quit(t)
 
 	if got := len(b.player.watched()); got != 0 {
 		t.Errorf("%d videos played from an empty dashboard", got)
+	}
+}
+
+// The list's own quit key, which the helper does not use because it does not
+// work from the search box.
+func TestQQuitsFromTheList(t *testing.T) {
+	b := newBrowser(t)
+
+	b.start(t)
+	b.eventually(t, "Nothing to show")
+	b.screen.press(key('q'))
+
+	select {
+	case <-b.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("q did not quit the list")
+	}
+}
+
+// And must not, from the box.
+func TestQDoesNotQuitFromTheSearchBox(t *testing.T) {
+	b := newBrowser(t)
+
+	b.start(t)
+	b.eventually(t, "Nothing to show")
+	b.screen.press(key('/'))
+	b.screen.typed("q")
+	b.eventually(t, "search: q")
+
+	select {
+	case <-b.done:
+		t.Fatal("typing q into the search box quit the program")
+	case <-time.After(200 * time.Millisecond):
+	}
+	b.quit(t)
+}
+
+func TestSearchReplacesTheListAndPlaysTheSameWay(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+
+	b.screen.press(key('/'))
+	b.eventually(t, "search:")
+	b.screen.typed("terminal video")
+	b.eventually(t, "search: terminal video")
+	b.screen.press(named(term.KeyEnter))
+
+	b.eventually(t, "A Search Result")
+	b.eventually(t, "2 results for terminal video")
+	if strings.Contains(b.screen.last(), "The newest thing") {
+		t.Error("the dashboard rows are still on screen behind the results")
+	}
+	if got := b.finder.queries(); len(got) != 1 || got[0] != "terminal video" {
+		t.Errorf("searched for %v, want one query for \"terminal video\"", got)
+	}
+
+	// A result plays exactly like a dashboard row: that is the milestone.
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "playing · A Search Result")
+	b.quit(t)
+
+	played := b.player.watched()
+	if len(played) != 1 || played[0].ID != "sssssssssss" {
+		t.Errorf("played %+v, want the selected result", played)
+	}
+}
+
+// The keys that drive the list are letters, and in the box they have to be
+// letters. Typing "jkqr" must not move a cursor or quit.
+func TestTypingACommandLetterTypesIt(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(key('/'))
+	b.eventually(t, "search:")
+
+	b.screen.typed("jkqrg")
+	b.eventually(t, "search: jkqrg")
+
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "A Search Result")
+	b.quit(t)
+
+	if got := b.finder.queries(); len(got) != 1 || got[0] != "jkqrg" {
+		t.Errorf("searched for %v, want the letters as typed", got)
+	}
+}
+
+func TestBackspaceInTheSearchBox(t *testing.T) {
+	b := newBrowser(t)
+
+	b.start(t)
+	b.eventually(t, "Nothing to show")
+	b.screen.press(key('/'))
+	b.screen.typed("cats")
+	b.eventually(t, "search: cats")
+
+	b.screen.press(named(term.KeyBackspace), named(term.KeyBackspace))
+	b.eventually(t, "search: ca_")
+
+	// Backspacing past the start is not an error and not a crash.
+	b.screen.press(named(term.KeyBackspace), named(term.KeyBackspace), named(term.KeyBackspace))
+	b.eventually(t, "search: _")
+	b.quit(t)
+}
+
+// A search box that takes characters it will then refuse is worse than one
+// that stops.
+func TestTheSearchBoxStopsAtItsLimit(t *testing.T) {
+	b := newBrowser(t)
+
+	br := b.start(t)
+	b.eventually(t, "Nothing to show")
+	b.screen.press(key('/'))
+	b.screen.typed(strings.Repeat("a", queryLimit+20))
+	b.eventually(t, "search: "+strings.Repeat("a", 40))
+	b.quit(t)
+
+	if len(br.query) > queryLimit {
+		t.Errorf("the box holds %d characters, and the limit is %d", len(br.query), queryLimit)
+	}
+}
+
+// Escape from the box leaves the dashboard exactly as it was, without
+// refetching every feed to rebuild it.
+func TestEscapeFromTheSearchBoxChangesNothing(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+
+	before := len(b.feeds.asked())
+	b.screen.press(key('/'))
+	b.screen.typed("cats")
+	b.eventually(t, "search: cats")
+	b.screen.press(named(term.KeyEscape))
+
+	b.eventually(t, "The newest thing")
+	b.quit(t)
+
+	if got := b.finder.queries(); len(got) != 0 {
+		t.Errorf("a cancelled box still searched for %v", got)
+	}
+	if after := len(b.feeds.asked()); after != before {
+		t.Errorf("escaping refetched %d feeds", after-before)
+	}
+}
+
+// Escape from the results puts the dashboard back, also without refetching.
+func TestEscapeFromResultsRestoresTheDashboard(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	before := len(b.feeds.asked())
+
+	b.screen.press(key('/'))
+	b.screen.typed("cats")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "A Search Result")
+
+	b.screen.press(named(term.KeyEscape))
+	b.eventually(t, "The newest thing")
+	b.quit(t)
+
+	if strings.Contains(b.screen.last(), "A Search Result") {
+		t.Error("the results are still on screen")
+	}
+	if after := len(b.feeds.asked()); after != before {
+		t.Errorf("coming back from results refetched %d feeds", after-before)
+	}
+}
+
+// An empty query is a way out of the box, not a search for nothing.
+func TestAnEmptySearchIsNotASearch(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(key('/'), named(term.KeyEnter))
+	b.eventually(t, "The newest thing")
+	b.quit(t)
+
+	if got := b.finder.queries(); len(got) != 0 {
+		t.Errorf("an empty box searched for %v", got)
+	}
+}
+
+// The dashboard never needs the extractor, so a user can go a long time
+// without discovering they have not got it. The message says which half of the
+// program is affected.
+func TestAMissingExtractorSaysWhatIsAffected(t *testing.T) {
+	b := newBrowser(t)
+	b.finder.fail(ytdlp.ErrNotInstalled)
+
+	b.start(t)
+	b.eventually(t, "Nothing to show")
+	b.screen.press(key('/'))
+	b.screen.typed("cats")
+	b.screen.press(named(term.KeyEnter))
+
+	b.eventually(t, "yt-dlp is not installed")
+	b.eventually(t, "the dashboard does not")
+	b.quit(t)
+}
+
+func TestAFailedSearchIsReportedOnScreen(t *testing.T) {
+	b := newBrowser(t)
+	b.finder.fail(errors.New("the search failed: Sign in to confirm you are not a bot"))
+
+	b.start(t)
+	b.eventually(t, "Nothing to show")
+	b.screen.press(key('/'))
+	b.screen.typed("cats")
+	b.screen.press(named(term.KeyEnter))
+
+	b.eventually(t, "not a bot")
+	b.quit(t)
+}
+
+// Watched is true however you found the video: a result you have already seen
+// is marked, even though it was never on the dashboard.
+func TestAResultAlreadyWatchedIsMarked(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	br := b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(key('/'))
+	b.screen.typed("cats")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "A Search Result")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "playing ·")
+
+	b.player.events <- mpv.Event{Name: "end-file", Reason: "eof"}
+	b.eventually(t, "watched · A Search Result")
+	b.quit(t)
+
+	if !br.state.HasWatched("sssssssssss") {
+		t.Error("a result played to its end was not recorded as watched")
+	}
+}
+
+// Refreshing a result set asks the same question again rather than throwing
+// the results away for a dashboard.
+func TestRefreshOnResultsSearchesAgain(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(key('/'))
+	b.screen.typed("cats")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "A Search Result")
+
+	b.screen.press(key('r'))
+	b.eventually(t, "A Search Result")
+	b.quit(t)
+
+	if got := b.finder.queries(); len(got) != 2 {
+		t.Errorf("searched %v, want the same query twice", got)
 	}
 }

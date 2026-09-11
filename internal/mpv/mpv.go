@@ -1,11 +1,9 @@
 // Package mpv launches mpv and drives it over an IPC socket.
 //
-// mpv is started idle and given work down the socket rather than handed a URL
-// and abandoned. That buys knowing when playback actually ended, and it lets a
-// second video reuse the process that is already open.
-//
-// mpv receives no positional argument at all (PLAN.md §7): what to play
-// arrives as a JSON command, built from an identifier that has been checked.
+// Started idle and given work down the socket rather than handed a URL and
+// abandoned: that buys knowing when playback actually ended, and lets a second
+// video reuse the process already open. mpv receives no positional argument at
+// all (§7).
 package mpv
 
 import (
@@ -57,8 +55,8 @@ type Event struct {
 // because it finished or was stopped.
 func (e Event) Failed() bool { return e.Name == "end-file" && e.Reason == "error" }
 
-// Finished reports that this event is a video reaching its own end, rather
-// than being stopped. It is the difference between watched and closed.
+// Finished distinguishes a video reaching its own end from one being stopped:
+// the difference between watched and closed.
 func (e Event) Finished() bool { return e.Name == "end-file" && e.Reason == "eof" }
 
 // Options configures a player. The zero value uses mpv from PATH and puts its
@@ -258,9 +256,8 @@ func (p *Player) Stop() error {
 	return err
 }
 
-// Events yields what mpv reports, until the player is closed. Buffered and
-// dropped when full rather than blocking, so mpv is never held up because bivy
-// is busy drawing.
+// Events yields what mpv reports. Buffered and dropped when full rather than
+// blocking, so mpv is never held up because bivy is busy drawing.
 func (p *Player) Events() <-chan Event { return p.events }
 
 // Close quits mpv, waits for it, and removes the socket directory.

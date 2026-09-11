@@ -14,7 +14,7 @@ take.
 
 ## Status
 
-Following, the dashboard and playback work. Search and thumbnails are still to
+Following, the dashboard, playback and search work. Thumbnails are still to
 come; `PLAN.md` §12 lists the rest.
 
 ## Using it
@@ -56,11 +56,15 @@ A channel that cannot be reached is named under the list rather than quietly
 left out, and its entries stay new until they have actually been shown. Run
 bivy with its output piped somewhere and it prints the list once instead.
 
+`/` searches. Results arrive in the same list and play the same way, and `esc`
+puts the dashboard back without fetching every feed again. The second column
+shows how long ago something was posted, or how long it runs — whichever the
+source actually knows.
+
 ## Still to come
 
 | | |
 |---|---|
-| **Search** | a query, resolved through `yt-dlp`, returning rows that behave like any other row. |
 | **Thumbnails** | rendered in the terminal where the graphics protocol is available, with bivy saying so plainly where it is not. |
 
 ## What it will not do
@@ -76,8 +80,8 @@ disagree with the argument rather than guess at the motive.
 - **mpv**, 0.29 or newer, for playback. bivy decodes nothing itself, and it
   launches mpv with `--no-config` so your own mpv setup is left exactly as it
   was found.
-- **yt-dlp**, which mpv uses to resolve a video. Needed for playback, never for
-  the dashboard.
+- **yt-dlp**, for search, and used by mpv to resolve a video for playback.
+  Never needed for the dashboard.
 
 Neither is needed to follow channels or read the dashboard. bivy says which one
 is missing when it needs one.

@@ -175,7 +175,7 @@ quietly is how this stops being testable, so each names what disagrees with it.
 | `internal/term` | raw mode, the alternate screen, key decoding, redraw. The interactive half of the tui split (ADR-009) |
 | `internal/config` | TOML configuration |
 | `internal/feed` | fetch and parse per-channel XML feeds. **Sole `net/http` importer.** |
-| `internal/ytdlp` | subprocess only: resolve a search query, resolve a stream URL |
+| `internal/ytdlp` | subprocess only: resolve a search query |
 | `internal/mpv` | launch and drive mpv over an IPC socket |
 | `internal/follow` | follows and watch state, pure |
 | `internal/store` | atomic `0600` persistence |
@@ -293,10 +293,9 @@ bivy makes exactly three kinds of outbound request:
 2. **One channel-page fetch**, from `internal/feed`, when a handle is followed
    — the only time bivy reads a page meant for a browser, and never at launch.
    ADR-008.
-3. **Extractor calls.** For playback these are made by mpv rather than by bivy
-   (ADR-010). For search they will come from `internal/ytdlp`, which is not
-   built yet. Either way they are subprocess executions rather than requests
-   bivy makes itself.
+3. **Extractor calls**, from `internal/ytdlp` for search and from mpv itself
+   for playback (ADR-010). Either way they are subprocess executions rather
+   than requests bivy makes itself, and neither runs at launch.
 
 Nothing else. No analytics, no update check, no crash reporting, no ping. The
 budget in §0 is what makes this checkable rather than merely stated: one
@@ -311,7 +310,8 @@ count above is the thing to watch — a fourth kind is a decision, not a detail.
 - **Fuzzing on the feed parser**, because it is the one place remote bytes are
   parsed.
 - **A table test on argument construction** for both external processes,
-  covering option-shaped input.
+  covering option-shaped input. The extractor has an option that runs a shell
+  command, so this is the one that matters.
 - **A stand-in for mpv** that speaks its IPC protocol, so the player is tested
   without mpv being installed. A test that asks whether something is installed
   passes where it was written and fails where the artifact is built.
@@ -353,7 +353,7 @@ executed.
 | 0 | **The skeleton.** Founding documents, budgets armed, prose compiler. | ✅ the conformance check prints `conformant.` |
 | 1 | **Follow and dashboard.** Add a channel, fetch feeds, show what is new since the last visit. No player yet. | ✅ a followed channel's new videos are listed on launch |
 | 2 | **Play.** mpv over IPC. | ✅ enter on a dashboard row plays it in an mpv window and marks it watched |
-| 3 | **Search.** Extractor-backed query into the same list model. | a query returns rows that play the same way |
+| 3 | **Search.** Extractor-backed query into the same list model. | ✅ a query returns rows that play the same way |
 | 4 | **Thumbnails.** Capability probe, kitty-protocol grid, text-only fallback where the protocol is absent. | the grid renders where supported and degrades where not |
 
 Manual verification, once milestone 2 lands: launch on Linux and on macOS,

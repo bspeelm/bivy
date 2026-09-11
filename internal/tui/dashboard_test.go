@@ -58,6 +58,15 @@ func watchedRow(channel, title string, ago time.Duration) follow.Row {
 	return r
 }
 
+// A search result: a duration and no publish time, which is what the
+// extractor actually returns.
+func resultRow(channel, title string, length time.Duration) follow.Row {
+	return follow.Row{
+		Video:   media.Video{ID: "aaaaaaaaaaa", Title: title, Duration: length},
+		Channel: channel,
+	}
+}
+
 func manyRows(n int) []follow.Row {
 	var rows []follow.Row
 	for i := range n {
@@ -104,6 +113,12 @@ func TestRenderDashboard(t *testing.T) {
 			row("Aye", "The one under the cursor", 2*time.Hour, true),
 		}}},
 		{"scrolled", Dashboard{Now: now, Interactive: true, Height: 10, Selected: 12, Rows: manyRows(30)}},
+		{"typing a search", Dashboard{Now: now, Interactive: true, Typing: true, Query: "terminal video", Rows: manyRows(5)}},
+		{"search results", Dashboard{Now: now, Interactive: true, Query: "terminal video", Rows: []follow.Row{
+			resultRow("DistroTube", "Watch Videos In Your Linux Terminal", 89*time.Second),
+			resultRow("Someone Else", "A much longer one", 2*time.Hour+5*time.Minute+9*time.Second),
+		}}},
+		{"search found nothing", Dashboard{Now: now, Interactive: true, Query: "asdfghjkl"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			golden(t, strings.ReplaceAll(tc.name, " ", "-"), Render(tc.d))
@@ -277,5 +292,142 @@ func TestAnAbsurdlyShortTerminalStillDraws(t *testing.T) {
 	frame := Render(Dashboard{Now: now, Interactive: true, Height: 2, Rows: manyRows(30)})
 	if frame == "" {
 		t.Error("a two-row terminal rendered nothing at all")
+	}
+}
+
+// A feed entry has a publish time and no duration; a search result has the
+// reverse. The column shows whichever is known rather than inventing the
+// other — a search result with no date would otherwise read as fifty years
+// old, which is the kind of wrong that looks like data.
+func TestTheSecondColumnShowsWhateverIsKnown(t *testing.T) {
+	published := media.Video{Published: now.Add(-2 * time.Hour)}
+	if got, want := when(now, published), "2h ago"; got != want {
+		t.Errorf("a feed entry showed %q, want %q", got, want)
+	}
+
+	result := media.Video{Duration: 89 * time.Second}
+	if got, want := when(now, result), "1:29"; got != want {
+		t.Errorf("a search result showed %q, want %q", got, want)
+	}
+
+	if got := when(now, media.Video{}); got != "" {
+		t.Errorf("a video with neither showed %q, want nothing", got)
+	}
+
+	// A publish time wins where both are somehow present: the dashboard is
+	// about when things arrived.
+	both := media.Video{Published: now.Add(-2 * time.Hour), Duration: 89 * time.Second}
+	if got, want := when(now, both), "2h ago"; got != want {
+		t.Errorf("a video with both showed %q, want %q", got, want)
+	}
+}
+
+func TestLength(t *testing.T) {
+	for _, tc := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "0:00"},
+		{9 * time.Second, "0:09"},
+		{89 * time.Second, "1:29"},
+		{10 * time.Minute, "10:00"},
+		{59*time.Minute + 59*time.Second, "59:59"},
+		{time.Hour, "1:00:00"},
+		{2*time.Hour + 5*time.Minute + 9*time.Second, "2:05:09"},
+		{9*time.Hour + 59*time.Minute + 59*time.Second, "9:59:59"},
+		// Seconds stop being information at this length, and the column is
+		// narrower than "12:34:56".
+		{12*time.Hour + 34*time.Minute + 56*time.Second, "12h"},
+		{1500 * time.Hour, "999h+"},
+		{-time.Second, ""},
+	} {
+		if got := Length(tc.d); got != tc.want {
+			t.Errorf("Length(%s) = %q, want %q", tc.d, got, tc.want)
+		}
+	}
+}
+
+// The second column is a fixed width, so a long value would push every title
+// on that row out of alignment.
+func TestLengthFitsItsColumn(t *testing.T) {
+	for _, d := range []time.Duration{
+		0, time.Second, 59 * time.Second, 59*time.Minute + 59*time.Second,
+		time.Hour, 12*time.Hour + 34*time.Minute + 56*time.Second,
+		400 * time.Hour,
+	} {
+		if got := Length(d); len(got) > agoWidth {
+			t.Errorf("Length(%s) = %q, which is %d wide and the column is %d", d, got, len(got), agoWidth)
+		}
+	}
+}
+
+// The search box has to show what has been typed, including nothing.
+func TestTheSearchPromptShowsTheQuery(t *testing.T) {
+	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true, Query: "cats"})
+	if !strings.Contains(frame, "search: cats") {
+		t.Errorf("the prompt does not show the query:\n%s", frame)
+	}
+	if !strings.Contains(frame, "esc cancel") {
+		t.Errorf("the prompt does not say how to get out:\n%s", frame)
+	}
+
+	empty := Render(Dashboard{Now: now, Interactive: true, Typing: true})
+	if !strings.Contains(empty, "search:") {
+		t.Errorf("an empty prompt does not show:\n%s", empty)
+	}
+}
+
+// While typing, the rows underneath are not drawn: the list about to be
+// replaced is not a list anyone is choosing from.
+func TestTypingHidesTheRowsBeneathIt(t *testing.T) {
+	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true, Query: "x", Rows: manyRows(5)})
+	if strings.Contains(frame, "Video number") {
+		t.Errorf("rows were drawn under the search prompt:\n%s", frame)
+	}
+}
+
+// A search that found nothing says so, rather than showing the empty-dashboard
+// advice to follow a channel.
+func TestASearchThatFoundNothingSaysSo(t *testing.T) {
+	frame := Render(Dashboard{Now: now, Interactive: true, Query: "asdfghjkl"})
+	if !strings.Contains(frame, "Nothing found") {
+		t.Errorf("a fruitless search does not say so:\n%s", frame)
+	}
+	if strings.Contains(frame, "bivy follow") {
+		t.Errorf("a fruitless search offered the empty-dashboard advice:\n%s", frame)
+	}
+}
+
+// Offering "enter play" with nothing to play is a small lie, and the hint line
+// is the one part of the screen a new user reads as instructions.
+func TestTheHintsOfferOnlyKeysThatWouldDoSomething(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		d       Dashboard
+		absent  string
+		present string
+	}{
+		{"an empty dashboard", Dashboard{Interactive: true}, "enter play", "/ search"},
+		{"a search with no results", Dashboard{Interactive: true, Query: "x"}, "enter play", "esc back"},
+		{"while typing", Dashboard{Interactive: true, Typing: true}, "↑↓ move", "esc cancel"},
+		{"results", Dashboard{Interactive: true, Query: "x", Rows: manyRows(2)}, "r refresh", "enter play"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := hints(tc.d)
+			if strings.Contains(got, tc.absent) {
+				t.Errorf("hints = %q, which offers %q with nothing to use it on", got, tc.absent)
+			}
+			if !strings.Contains(got, tc.present) {
+				t.Errorf("hints = %q, which does not offer %q", got, tc.present)
+			}
+		})
+	}
+}
+
+// "showing 1-0 of 5" is arithmetic rather than information.
+func TestNoWindowCountWhenNoRowsAreDrawn(t *testing.T) {
+	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true, Query: "x", Rows: manyRows(5)})
+	if strings.Contains(frame, "showing") {
+		t.Errorf("a window count was drawn with no window:\n%s", frame)
 	}
 }
