@@ -93,6 +93,16 @@ const usage = `bivy — a terminal browser and player for online video
     bivy list               the channels you follow
     bivy version            what this is
 
+Once bivy is open, most of it is keys rather than commands:
+
+    ↑↓ or j k               move
+    enter                   play the row in mpv
+    /                       search
+    esc                     back to the dashboard
+    r                       refresh
+    q                       quit
+
+Playing needs mpv, and searching needs yt-dlp. The dashboard needs neither.
 bivy never logs in, reads no cookies, and downloads nothing.
 `
 
