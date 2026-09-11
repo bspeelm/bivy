@@ -30,6 +30,15 @@ const (
 	// bivy identifies the program, never the person. There is no version of
 	// this string that varies per install, per machine, or per run.
 	userAgent = "bivy (+https://github.com/bspeelm/bivy)"
+
+	// The feed endpoint answers 404 or 500 to roughly four requests in ten,
+	// intermittently, for channels that answer 200 on the next attempt.
+	// Measured, not assumed. One attempt therefore makes following a channel
+	// and refreshing the dashboard a coin toss.
+	attempts = 3
+	// Short, because this runs at launch while somebody waits. The whole of a
+	// failed set of attempts still costs under a second of waiting.
+	backoff = 250 * time.Millisecond
 )
 
 // Client fetches feeds. The zero value is not usable; call New.
@@ -91,6 +100,21 @@ func (c *Client) Fetch(ctx context.Context, channelID string) (media.Channel, er
 	return ch, nil
 }
 
+// transient reports whether a status is one this endpoint hands out and then
+// takes back.
+//
+// 404 is on the list, which is not how 404 usually reads. It is here because
+// the feed endpoint measurably answers it to requests for channels that exist,
+// and a channel that genuinely does not exist answers it every time — so the
+// cost of including it is two extra requests before the same message.
+func transient(status int) bool {
+	switch status {
+	case http.StatusNotFound, http.StatusTooManyRequests:
+		return true
+	}
+	return status >= 500
+}
+
 // channelIDIn finds a channel identifier in a page, in the order the markers
 // are worth trusting. The page's own link to its feed comes first because it
 // is the exact thing bivy is trying to learn; the others appear earlier in the
@@ -123,10 +147,48 @@ func (c *Client) Resolve(ctx context.Context, handle string) (string, error) {
 	return "", fmt.Errorf("no channel identifier on the page for %s", handle)
 }
 
-// get performs the request and reads at most limit bytes of the response. The
+// get performs the request, retrying what the server is likely to answer
+// differently the next time.
+func (c *Client) get(ctx context.Context, target string, limit int64) (string, error) {
+	var err error
+	for attempt := range attempts {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(time.Duration(attempt) * backoff):
+			}
+		}
+
+		var body string
+		body, err = c.attempt(ctx, target, limit)
+		if err == nil {
+			return body, nil
+		}
+		if !worthRetrying(err) {
+			return "", err
+		}
+	}
+	return "", err
+}
+
+// retryable marks a failure the server may well answer differently next time.
+type retryable struct{ error }
+
+// worthRetrying reports whether another attempt is worth making. A cancelled
+// context never is: the caller has stopped waiting.
+func worthRetrying(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var r retryable
+	return errors.As(err, &r)
+}
+
+// attempt is one request, reading at most limit bytes of the response. The
 // body length is chosen by the server, and io.ReadAll on a remote response is
 // an invitation phrased as convenience (ADR-001).
-func (c *Client) get(ctx context.Context, target string, limit int64) (string, error) {
+func (c *Client) attempt(ctx context.Context, target string, limit int64) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return "", err
@@ -139,12 +201,18 @@ func (c *Client) get(ctx context.Context, target string, limit int64) (string, e
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", err
+		// A connection that failed is worth another go; a request that could
+		// not be built is not, and never reaches here.
+		return "", retryable{err}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%s: %s", target, resp.Status)
+		err := fmt.Errorf("%s: %s", target, resp.Status)
+		if transient(resp.StatusCode) {
+			return "", retryable{err}
+		}
+		return "", err
 	}
 
 	// One byte past the limit, so hitting it is distinguishable from a body
