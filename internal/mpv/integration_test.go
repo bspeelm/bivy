@@ -68,7 +68,7 @@ func TestRealMPVAcceptsOurFlags(t *testing.T) {
 func TestRealMPVIsCleanedUpAfterwards(t *testing.T) {
 	realMPV(t)
 
-	runtime := t.TempDir()
+	runtime := shortTempDir(t)
 	p, err := Start(context.Background(), Options{Env: os.Environ(), RuntimeDir: runtime})
 	if err != nil {
 		t.Fatal(err)

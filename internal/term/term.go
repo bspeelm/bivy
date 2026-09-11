@@ -36,9 +36,8 @@ const (
 	KeyQuit
 )
 
-// Escape sequences. Written out rather than pulled from a database, because
-// bivy sends five of them and a terminfo dependency to hold five strings is
-// the trade this package exists to refuse.
+// Written out rather than pulled from terminfo: bivy sends five of them, and a
+// dependency to hold five strings is the trade this package exists to refuse.
 const (
 	enterAltScreen = "\x1b[?1049h"
 	leaveAltScreen = "\x1b[?1049l"
@@ -153,9 +152,8 @@ func (t *Terminal) Draw(frame string) error {
 // Keys yields decoded keypresses until the terminal is closed.
 func (t *Terminal) Keys() <-chan Key { return t.keys }
 
-// Resized fires when the terminal changes size. It holds at most one pending
-// notification: what a redraw needs to know is the current size, and a queue
-// of stale ones only delays reaching it.
+// Resized fires when the terminal changes size, holding at most one pending
+// notification: a redraw needs the current size, not a queue of stale ones.
 func (t *Terminal) Resized() <-chan struct{} { return t.resized }
 
 func (t *Terminal) readKeys() {
