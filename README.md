@@ -42,7 +42,13 @@ bivy · 2 new videos since your last visit
 ```
 
 Enter plays the row under the cursor in mpv's own window and leaves you on the
-dashboard, so you can keep browsing. One mpv serves the whole session. A video
+dashboard, so you can keep browsing. One mpv serves the whole session, and it
+puts no window up until there is something to show.
+
+The window is mpv's, so mpv's keys work in it — `q` closes it, `space` pauses,
+`f` is fullscreen. Worth knowing if your desktop gives it no title bar: on
+Wayland, mpv draws its own decorations through libdecor, and a build without
+that on a compositor offering none server-side has no close button to click. A video
 is marked watched when it reaches its end, not when it starts — closing it
 after ten seconds does not count as having watched it.
 

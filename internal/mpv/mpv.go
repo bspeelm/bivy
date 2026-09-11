@@ -168,6 +168,13 @@ func Start(ctx context.Context, opt Options) (*Player, error) {
 // flags is every option bivy gives mpv, and the reason for each. Version-gated
 // ones name the version that makes the gate deletable, so the compatibility
 // scar tissue has an expiry date (PLAN.md §4).
+//
+// --force-window is deliberately absent. It would put a window up the moment
+// mpv starts, which sounds like the answer to "did anything happen" — but bivy
+// already answers that on its own status line, and the cost is an empty window
+// sitting there for the whole session, including after every video ends. On a
+// compositor that offers no decorations it has no title bar to close it by
+// either, so it is a pane the user cannot get rid of and did not ask for.
 func flags(socket string) []string {
 	return []string{
 		// ADR-006: the user's own mpv setup is neither read nor written.
@@ -180,9 +187,6 @@ func flags(socket string) []string {
 		// The hardware decode path. Since mpv 0.29.0; before that it was
 		// spelled --vo=opengl, which is the gate this constant names.
 		"--vo=gpu",
-		// A window from the moment mpv starts, so a slow resolve does not
-		// look like nothing happened.
-		"--force-window=yes",
 		// bivy owns the terminal, and mpv writing status lines into the
 		// screen bivy is drawing is the most visible way this goes wrong.
 		"--terminal=no",

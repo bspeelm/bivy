@@ -226,6 +226,20 @@ func TestNothingUserControlledReachesTheArgv(t *testing.T) {
 	}
 }
 
+// An idle mpv must not put a window up.
+//
+// --force-window is the obvious way to answer "did pressing enter do
+// anything", and it is the wrong one: bivy answers that on its own status
+// line, and a forced window then sits there for the rest of the session,
+// empty, including after every video ends. Three of them were left on a
+// desktop before this test existed — and on a compositor that offers no
+// decorations they have no title bar to close them by.
+func TestAnIdlePlayerPutsNoWindowUp(t *testing.T) {
+	if contains(flags("/run/somewhere/mpv.sock"), "--force-window") {
+		t.Error("bivy forces a window, which means an empty one whenever nothing is playing")
+	}
+}
+
 func contains(haystack []string, needle string) bool {
 	for _, h := range haystack {
 		if h == needle || strings.HasPrefix(h, needle+"=") {

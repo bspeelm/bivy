@@ -234,6 +234,12 @@ one. ADR-004.
 
 - mpv is a child process with an IPC socket, not a fire-and-forget `exec`. One
   process serves a whole session; a second video reuses it.
+- No window is forced while mpv is idle. bivy says on its own status line that
+  something is loading, and a forced window is an empty pane for the rest of
+  the session — with no title bar to close it by, where the compositor offers
+  no decorations.
+- mpv is asked to quit, never killed while it will still answer. A killed mpv
+  can outlive the process that killed it.
 - The socket lives in a `0700` directory under the runtime directory — or the
   system temporary directory where there is none, which is every Mac — and is
   removed on exit, including when startup failed.
