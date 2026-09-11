@@ -16,6 +16,8 @@ type (
 	Search struct{ Query string }
 	// Channels asks for channels matching words.
 	Channels struct{ Query string }
+	// Open shows a channel's videos.
+	Open struct{ Target string }
 	// Follow adds a channel: a handle, a channel URL, an identifier, or the
 	// name of a channel already on screen.
 	Follow struct{ Target string }
@@ -64,6 +66,17 @@ var Commands = []Command{
 				return nil, badArgument{"channels", "something to look for"}
 			}
 			return Channels{Query: arg}, nil
+		},
+	},
+	{
+		Name:     "open",
+		Summary:  "browse a channel's videos, by name on screen or by id",
+		Argument: "channel",
+		run: func(arg string) (Intent, error) {
+			if arg == "" {
+				return nil, badArgument{"open", "a channel"}
+			}
+			return Open{Target: arg}, nil
 		},
 	},
 	{
