@@ -24,7 +24,7 @@ help:
 	@echo "make check       lint, vet, race tests, budgets, standard - the gate"
 	@echo "make test        go test"
 	@echo "make race        go test -race"
-	@echo "make integration go test -tags=integration - needs mpv installed"
+	@echo "make integration go test -tags=integration - needs mpv and the network"
 	@echo "make budgets     the PLAN.md §0 budgets"
 	@echo "make standard    conformance against the development standard, if present"
 	@echo "make install-binary  build it, put it on PATH, and say what is missing"
@@ -50,9 +50,9 @@ test:
 race:
 	go test -race ./...
 
-# Drives a real mpv. Not in `check`: the suite must not require mpv to be
-# installed, because a test that asks whether something is present passes
-# where it was written and fails where the artifact is built.
+# Drives a real mpv and fetches a real thumbnail. Not in `check`: the suite
+# must not require either, because a test that asks whether something is
+# present passes where it was written and fails where the artifact is built.
 integration:
 	go test -tags=integration ./...
 

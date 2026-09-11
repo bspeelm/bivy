@@ -2,12 +2,10 @@
 // decoding and redrawing.
 //
 // Written here rather than taken from a framework (ADR-009), so this package
-// owns every byte bivy sends to the terminal — which matters most for what has
-// not been built yet, since a thumbnail grid speaks a graphics protocol
-// directly.
+// owns every byte bivy sends to the terminal — which is what lets it hand the
+// graphics protocol its own sequences untouched.
 //
-// It does I/O, which is why it is not internal/tui: that package renders a
-// model and returns text, and this is the other half of the split.
+// It does I/O, which is why it is not internal/tui.
 package term
 
 import (
@@ -20,14 +18,13 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/term"
+
+	"github.com/bspeelm/bivy/internal/graphics"
 )
 
-// Key names a keypress that is not a character.
-//
-// What the characters mean is not decided here. A list reads "j" as down and a
-// search box reads it as the letter j, and only the screen knows which it is
-// looking at — so this package reports what was pressed and the caller decides
-// what it meant.
+// Key names a keypress that is not a character. What the characters mean is
+// not decided here: a list reads "j" as down and a command line reads it as
+// the letter j, and only the screen knows which.
 type Key int
 
 const (
@@ -68,12 +65,13 @@ const (
 
 // Terminal is a terminal in raw mode, on the alternate screen.
 type Terminal struct {
-	in      *os.File
-	out     *os.File
-	state   *term.State
-	keys    chan Press
-	resized chan struct{}
-	closed  chan struct{}
+	in       *os.File
+	out      *os.File
+	state    *term.State
+	graphics graphics.Capability
+	keys     chan Press
+	resized  chan struct{}
+	closed   chan struct{}
 }
 
 // ErrNotATerminal is returned when input or output is not a terminal, which is
@@ -82,8 +80,7 @@ type Terminal struct {
 var ErrNotATerminal = errors.New("not a terminal")
 
 // Open puts the terminal into raw mode and switches to the alternate screen,
-// which is what makes bivy leave no trace on the scrollback: on Close the
-// terminal restores whatever was there before.
+// which is what makes bivy leave no trace on the scrollback.
 func Open(in, out *os.File) (*Terminal, error) {
 	if !term.IsTerminal(int(in.Fd())) || !term.IsTerminal(int(out.Fd())) {
 		return nil, ErrNotATerminal
@@ -108,10 +105,17 @@ func Open(in, out *os.File) (*Terminal, error) {
 		return nil, err
 	}
 
+	// Before the key reader starts, so the answer is read by the probe rather
+	// than decoded as somebody typing.
+	t.graphics = graphics.Probe(in, out)
+
 	go t.readKeys()
 	go t.watchResize()
 	return t, nil
 }
+
+// Graphics is what the terminal said it could draw, asked once on open.
+func (t *Terminal) Graphics() graphics.Capability { return t.graphics }
 
 // Close restores the terminal to exactly how it was found. Safe to call twice,
 // and it must be: this runs from a deferred call on the ordinary path and a
@@ -141,12 +145,15 @@ func (t *Terminal) Size() (width, height int) {
 	return w, h
 }
 
-// Draw replaces what is on screen with frame. Each line is cleared as it is
-// written, rather than blanking the screen first: blanking shows the empty
-// screen for one refresh, which is the flicker that makes a redraw on every
-// keypress unpleasant.
+// Draw replaces what is on screen with frame, clearing each line as it is
+// written: blanking first shows an empty screen for one refresh.
 func (t *Terminal) Draw(frame string) error {
 	var b []byte
+	// Any picture the terminal holds is taken away first: writing text over
+	// one does not remove it.
+	if t.graphics == graphics.Kitty {
+		b = append(b, graphics.Clear...)
+	}
 	b = append(b, cursorHome...)
 
 	for _, c := range []byte(frame) {
@@ -225,10 +232,8 @@ func (t *Terminal) watchResize() {
 }
 
 // DecodeKey reads one keypress from the front of b, returning how many bytes
-// it consumed — and zero when b holds the start of an escape sequence but not
-// all of it, so the caller reads more rather than deciding a lone escape was
-// pressed. Pure, so every sequence bivy understands is tested without a
-// terminal.
+// it consumed — and zero when b holds the start of a sequence but not all of
+// it. Pure, so every sequence is tested without a terminal.
 func DecodeKey(b []byte) (Press, int) {
 	if len(b) == 0 {
 		return Press{}, 0

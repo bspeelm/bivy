@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/bspeelm/bivy/internal/media"
 )
 
 const testChannel = "UCabcdefghijklmnopqrstuv"
@@ -351,5 +353,37 @@ func TestAnOversizedBodyIsNotRetried(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("made %d attempts at an oversized body, want 1", calls)
+	}
+}
+
+// A thumbnail is fetched by the one package that may touch the network (§0),
+// and its address is derived from the identifier rather than taken from a
+// feed.
+func TestThumbnail(t *testing.T) {
+	var asked string
+	c := against(t, func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.Path
+		_, _ = w.Write([]byte("\xff\xd8\xff pretend jpeg"))
+	})
+	// The thumbnail host is not one of the bases the test server stands in
+	// for, so this asserts what it builds rather than what it fetches.
+	if got := media.ThumbnailURL("dQw4w9WgXcQ"); got != "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg" {
+		t.Errorf("thumbnail address = %q", got)
+	}
+	_ = asked
+	_ = c
+}
+
+func TestThumbnailRefusesSomethingThatIsNotAVideo(t *testing.T) {
+	reached := false
+	c := against(t, func(http.ResponseWriter, *http.Request) { reached = true })
+
+	for _, bad := range []string{"", "not-an-id", "--exec=touch /tmp/pwned", "../../etc/passwd"} {
+		if _, err := c.Thumbnail(context.Background(), bad); err == nil {
+			t.Errorf("Thumbnail(%q) returned no error", bad)
+		}
+	}
+	if reached {
+		t.Error("a malformed identifier reached the network")
 	}
 }

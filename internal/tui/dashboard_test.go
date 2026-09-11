@@ -531,3 +531,51 @@ func TestTheChannelListOffersFollowNotPlay(t *testing.T) {
 		t.Errorf("hints = %q, which offers play on a list of channels", got)
 	}
 }
+
+// A picture takes rows from the list, and a short terminal has none to give:
+// one row and a thumbnail is a thumbnail of something nobody can scroll away
+// from.
+func TestAPictureYieldsToAShortScreen(t *testing.T) {
+	d := Dashboard{Art: "<art>", ArtRows: 7}
+
+	if got := d.artRows(20); got != 7 {
+		t.Errorf("with 20 rows the picture got %d, want 7", got)
+	}
+	if got := d.artRows(10); got != 0 {
+		t.Errorf("with 10 rows the picture got %d, leaving %d for the list", got, 10-got)
+	}
+	if got := d.artRows(11); got != 7 {
+		t.Errorf("with 11 rows the picture got %d, want 7", got)
+	}
+}
+
+func TestNoPictureNoRows(t *testing.T) {
+	if got := (Dashboard{ArtRows: 7}).artRows(20); got != 0 {
+		t.Errorf("a frame with no picture reserved %d rows", got)
+	}
+	if got := (Dashboard{Art: "<art>"}).artRows(20); got != 0 {
+		t.Errorf("a picture of no height reserved %d rows", got)
+	}
+}
+
+// The picture is drawn and the list still fits between the rules.
+func TestAFrameWithAPictureIsStillTheRightHeight(t *testing.T) {
+	const height = 24
+	with := Render(Dashboard{
+		Now: now, Interactive: true, Height: height, Width: 80,
+		Rows: manyRows(30), Art: "<art>", ArtRows: 7,
+	})
+	without := Render(Dashboard{
+		Now: now, Interactive: true, Height: height, Width: 80,
+		Rows: manyRows(30),
+	})
+
+	// The picture is one string occupying rows the frame steps over, so the
+	// line counts match: what it costs is list rows, not frame rows.
+	if a, b := strings.Count(with, "\n"), strings.Count(without, "\n"); a != b {
+		t.Errorf("a frame with a picture is %d lines and one without is %d", a, b)
+	}
+	if !strings.Contains(with, "<art>") {
+		t.Error("the picture was not drawn")
+	}
+}

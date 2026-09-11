@@ -57,10 +57,8 @@ func (s *Store) Dirs() []string {
 }
 
 // baseDir applies the XDG variable when it names an absolute path, and the
-// platform's own convention otherwise — on macOS too, which is not what Apple
-// documents. Someone who has set XDG_DATA_HOME has said where they want
-// application data, and ignoring them is how a program ends up somewhere
-// surprising.
+// platform's convention otherwise — on macOS too, which is not what Apple
+// documents. Someone who set XDG_DATA_HOME has said where they want it.
 func baseDir(env string, fallback func(home string) string) (string, error) {
 	if d := os.Getenv(env); filepath.IsAbs(d) {
 		return filepath.Join(d, dirName), nil
@@ -105,9 +103,7 @@ func (s *Store) ReadJSON(name string, v any) error {
 
 // WriteJSON saves a data file atomically: written to a temporary file in the
 // same directory and renamed over the target, because a half-written follow
-// list is worse than an old one. The temporary file is removed on every path
-// out, including the failing ones — a program that promises no residue does
-// not get to leave some when it is having a bad day.
+// list is worse than an old one. The temporary file goes on every path out.
 func (s *Store) WriteJSON(name string, v any) (err error) {
 	if err := os.MkdirAll(s.DataDir, dirPerm); err != nil {
 		return err
