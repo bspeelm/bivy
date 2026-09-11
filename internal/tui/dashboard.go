@@ -55,8 +55,10 @@ type Dashboard struct {
 	// wrong with the last thing that was asked for.
 	Status string
 	// Query is what was searched for. Non-empty means the rows are results
-	// rather than the dashboard.
-	Query string
+	// rather than the dashboard, and Channels means those results are
+	// channels.
+	Query    string
+	Channels bool
 	// Line is what has been typed into the command line, and Typing means it
 	// has the keyboard.
 	Line   string
@@ -87,17 +89,16 @@ const (
 )
 
 const (
-	keyHints    = "↑↓ move · enter play · / search · : commands · r refresh · :q quit"
-	resultHints = "↑↓ move · enter play · / search again · : commands · esc back · :q quit"
-	emptyHints  = "/ search · : commands · r refresh · :q quit"
-	noResults   = "/ search again · esc back · :q quit"
+	keyHints     = "↑↓ move · enter play · / search · : commands · r refresh · :q quit"
+	resultHints  = "↑↓ move · enter play · f follow · / search again · esc back · :q quit"
+	channelHints = "↑↓ move · f follow · / search · esc back · :q quit"
+	emptyHints   = "/ search · : commands · r refresh · :q quit"
+	noResults    = "/ search again · esc back · :q quit"
 )
 
-// styled wraps text in an attribute.
-//
-// Width is always measured on the text before this is applied: an escape
-// sequence occupies no cells, and counting it as though it did is how a
-// rendered row ends up shorter than the line it is supposed to fill.
+// styled wraps text in an attribute. Width is always measured before this is
+// applied: an escape sequence occupies no cells, and counting it as one is how
+// a rendered row ends up short of the line it should fill.
 func styled(attr, text string) string {
 	if text == "" {
 		return ""
@@ -108,11 +109,9 @@ func styled(attr, text string) string {
 // rule is the horizontal line above and below the list.
 func rule(width int) string { return strings.Repeat("─", width) }
 
-// fit makes a line exactly width cells: truncated with a mark where it is too
-// long, padded with spaces where it is too short.
-//
-// Padding matters as much as truncating. The selected row is drawn in reverse,
-// and a row that stops early is a highlight that stops early.
+// fit makes a line exactly width cells. Padding matters as much as truncating:
+// the selected row is drawn in reverse, and a row that stops early is a
+// highlight that stops early.
 func fit(s string, width int) string {
 	if width <= 0 {
 		return ""
@@ -182,6 +181,8 @@ func heading(d Dashboard) string {
 	}
 
 	switch {
+	case d.Query != "" && d.Channels:
+		return fmt.Sprintf("channels · %s for %q", plural(len(d.Rows), "channel", "channels"), d.Query)
 	case d.Query != "":
 		return fmt.Sprintf("search · %s for %q", plural(len(d.Rows), "result", "results"), d.Query)
 	case len(d.Rows) == 0:
@@ -223,8 +224,11 @@ func list(d Dashboard, width, visible int) string {
 // row is one line: what is being chosen on the left, what is known about it on
 // the right.
 func row(d Dashboard, r follow.Row, width int) string {
-	left := marker(r) + " " + r.Video.Title
+	if r.IsChannel() {
+		return sides(marker(r)+" "+r.Channel, followers(r.Followers), width)
+	}
 
+	left := marker(r) + " " + r.Video.Title
 	right := r.Channel
 	if w := when(d.Now, r.Video); w != "" {
 		if right != "" {
@@ -235,11 +239,24 @@ func row(d Dashboard, r follow.Row, width int) string {
 	return sides(left, right, width)
 }
 
-// sides puts one string at each end of a line.
-//
-// The left is what the row is; the right is what is known about it. The left
-// yields when there is not room for both, because a title cut short is still
-// the title and a channel name cut short is a different channel.
+// followers is a subscriber count at a glance. Exact figures in the millions
+// are noise: the number is for telling similarly named channels apart.
+func followers(n int) string {
+	switch {
+	case n <= 0:
+		return ""
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM subscribers", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.0fK subscribers", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d subscribers", n)
+	}
+}
+
+// sides puts one string at each end of a line. The left yields when there is
+// not room for both: a title cut short is still the title, and a channel name
+// cut short is a different channel.
 func sides(left, right string, width int) string {
 	const gap = 2
 
@@ -282,6 +299,13 @@ func status(d Dashboard) string {
 	if d.Status != "" {
 		return d.Status
 	}
+	// A channel's description of itself, for the row under the cursor. There
+	// is no room for it on the row and it is what tells two apart.
+	if d.Channels && d.Selected < len(d.Rows) {
+		if summary := d.Rows[d.Selected].Summary; summary != "" {
+			return summary
+		}
+	}
 	if len(d.Failed) > 0 && d.Query == "" {
 		return fmt.Sprintf("%s could not be reached: %s",
 			plural(len(d.Failed), "channel", "channels"), strings.Join(d.Failed, ", "))
@@ -311,6 +335,8 @@ func hints(d Dashboard) string {
 		return noResults
 	case len(d.Rows) == 0:
 		return emptyHints
+	case d.Channels:
+		return channelHints
 	case d.Query != "":
 		return resultHints
 	default:
@@ -358,9 +384,12 @@ func spelled(c Command) string {
 // marker is the cell before the title. Watched outranks new, and there is no
 // colour in it: the one thing a list must survive is being read on a terminal
 // that has none.
+//
+// A followed channel gets the same tick a watched video does. Both mean "you
+// already have this one", which is what the mark is for.
 func marker(r follow.Row) string {
 	switch {
-	case r.Watched:
+	case r.Watched, r.Followed:
 		return "✓"
 	case r.New:
 		return "•"

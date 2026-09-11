@@ -62,18 +62,31 @@ everything there is:
 ```
 :_
 
-  search words      find videos by words
-  follow channel    add a channel: @handle, a URL, an id, or a name on screen
-  unfollow channel  stop following one, by name or id
-  refresh           fetch the feeds again
-  help              what the keys and commands do
-  quit              leave
+  search <words>   channels <words>   follow <channel>
+  unfollow <channel>   refresh   help   quit
 ```
 
-`/` is the same line with `search ` already in it. The point of the rest is
-`follow`: after a search, the channel is a column you are reading, so
-`:follow Papa Meat` follows the channel those results came from without
-leaving the screen.
+`/` is the same line with `search ` already in it.
+
+`:channels <words>` finds channels rather than videos, and **`f` follows the
+one under the cursor**:
+
+```
+bivy · channels · 4 channels for "papa meat"
+────────────────────────────────────────────────────────────────────
+>   Papa Meat                                       3.6M subscribers
+  ✓ MeatCanyon                                      9.1M subscribers
+    Meaty Magic                                     266K subscribers
+
+────────────────────────────────────────────────────────────────────
+I make cartoons on my main account
+↑↓ move · f follow · / search · esc back · :q quit
+```
+
+A tick marks one you already follow, and the status line carries the
+channel's own description of itself — which is what tells two similarly named
+channels apart. `f` works on a video row too, following the channel that video
+came from.
 
 A command can be shortened to any prefix only one command answers to, so `:q`
 quits and `:se cats` searches. Quitting is deliberately not a key: `q` sat one

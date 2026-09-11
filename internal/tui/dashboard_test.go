@@ -68,6 +68,17 @@ func resultRow(channel, title string, length time.Duration) follow.Row {
 	}
 }
 
+// A channel row: no video, a subscriber count and a description.
+func channelRow(name, summary string, followers int, followed bool) follow.Row {
+	return follow.Row{
+		Channel:   name,
+		ChannelID: "UCaaaaaaaaaaaaaaaaaaaaaa",
+		Summary:   summary,
+		Followers: followers,
+		Followed:  followed,
+	}
+}
+
 func manyRows(n int) []follow.Row {
 	var rows []follow.Row
 	for i := range n {
@@ -123,6 +134,12 @@ func TestRenderDashboard(t *testing.T) {
 			resultRow("Someone Else", "A much longer one", 2*time.Hour+5*time.Minute+9*time.Second),
 		}}},
 		{"search found nothing", Dashboard{Now: now, Interactive: true, Query: "asdfghjkl"}},
+		{"channel results", Dashboard{Now: now, Interactive: true, Query: "papa meat", Channels: true, Height: 12, Rows: []follow.Row{
+			channelRow("Papa Meat", "I make cartoons on my main account", 3_590_000, false),
+			channelRow("MeatCanyon", "Oh hi i make cartoons", 9_130_000, true),
+			channelRow("Meaty Magic", "The channel for all your magic", 266_000, false),
+			channelRow("A Small One", "just starting out", 412, false),
+		}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			golden(t, strings.ReplaceAll(tc.name, " ", "-"), Render(tc.d))
@@ -470,5 +487,47 @@ func TestACommandLineWithNoMatchesSaysSo(t *testing.T) {
 	frame := plain(Render(Dashboard{Now: now, Interactive: true, Typing: true, Line: "xyzzy"}))
 	if !strings.Contains(frame, "no command starts with that") {
 		t.Errorf("a line matching nothing does not say so:\n%s", frame)
+	}
+}
+
+// A channel row shows what tells one channel from another with a similar name.
+func TestAChannelRowShowsItsSize(t *testing.T) {
+	for _, tc := range []struct {
+		n    int
+		want string
+	}{
+		{3_590_000, "3.6M subscribers"},
+		{9_130_000, "9.1M subscribers"},
+		{266_000, "266K subscribers"},
+		{1_200, "1K subscribers"},
+		{412, "412 subscribers"},
+		{0, ""},
+		{-1, ""},
+	} {
+		if got := followers(tc.n); got != tc.want {
+			t.Errorf("followers(%d) = %q, want %q", tc.n, got, tc.want)
+		}
+	}
+}
+
+// A channel already followed is marked, because the whole point of the list is
+// deciding which to follow.
+func TestAFollowedChannelIsMarked(t *testing.T) {
+	if got, want := marker(channelRow("Aye", "", 100, true)), "✓"; got != want {
+		t.Errorf("a followed channel is marked %q, want %q", got, want)
+	}
+	if got, want := marker(channelRow("Aye", "", 100, false)), " "; got != want {
+		t.Errorf("an unfollowed channel is marked %q, want %q", got, want)
+	}
+}
+
+// The hints on a channel list offer f and not enter: there is nothing to play.
+func TestTheChannelListOffersFollowNotPlay(t *testing.T) {
+	got := hints(Dashboard{Interactive: true, Query: "x", Channels: true, Rows: []follow.Row{channelRow("Aye", "", 1, false)}})
+	if !strings.Contains(got, "f follow") {
+		t.Errorf("hints = %q, want them to offer f", got)
+	}
+	if strings.Contains(got, "enter play") {
+		t.Errorf("hints = %q, which offers play on a list of channels", got)
 	}
 }

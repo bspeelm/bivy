@@ -191,11 +191,9 @@ func firstLine(stderr string, fallback error) string {
 // place it is written down.
 const channelFilter = "EgIQAg%3D%3D"
 
-// Channels asks the extractor for channels matching a query.
-//
-// The whole argument is a URL bivy builds, so what reaches the argv begins
-// with https:// and cannot be read as an option however the query begins. The
-// query itself is escaped into it rather than concatenated.
+// Channels asks the extractor for channels matching a query. The argument is a
+// URL bivy builds, so what reaches the argv begins with https:// and cannot be
+// read as an option however the query begins.
 func (c *Client) Channels(ctx context.Context, query string, limit int) ([]media.Channel, error) {
 	query = strings.TrimSpace(media.Text(query))
 	if query == "" {
@@ -218,11 +216,9 @@ func (c *Client) Channels(ctx context.Context, query string, limit int) ([]media
 	return ParseChannels(strings.NewReader(out)), nil
 }
 
-// ParseChannels reads channel entries out of the extractor's output.
-//
-// Videos and channels arrive through the same command and are told apart by
-// the extractor naming which of its own readers produced each line, so a
-// result that is not a channel is dropped rather than rendered as one.
+// ParseChannels reads channel entries out of the extractor's output. Videos
+// and channels arrive through the same command, told apart by which of the
+// extractor's own readers produced each line.
 func ParseChannels(r *strings.Reader) []media.Channel {
 	var channels []media.Channel
 
