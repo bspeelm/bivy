@@ -61,6 +61,15 @@ jobs:
       # cannot open mpv's window, and a skip is the honest result.
       - run: make integration
 
+      # Asked before the player is, because the two failures look identical
+      # from inside mpv: a refused extractor and a broken player both end as
+      # "unrecognized file format", which is mpv saying it was handed a web
+      # page. Answering this separately is the difference between news about a
+      # third party and a bug in bivy.
+      - name: the extractor can still resolve a stream
+        if: runner.os == 'Linux'
+        run: yt-dlp -g -- 'https://www.youtube.com/watch?v=jNQXAC9IVRw' | head -1
+
       # Playback for real, under a virtual display. This is the fragile step
       # and it is deliberately last: bivy asks mpv for --vo=gpu, which here
       # falls to software rendering, and it reaches the live service for the
