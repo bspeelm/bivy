@@ -1,0 +1,70 @@
+# A tag publishes a release.
+#
+# PLAN.md §11 describes this; docs_test.go holds the two together. Everything
+# here is a command that also exists in the Makefile, so a release can be
+# rehearsed on a workstation rather than only observed in CI.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  # The same gate as every commit, on both platforms, before anything is
+  # published. A tag is not a reason to skip it.
+  gate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make check
+
+  publish:
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The version is `git describe`, so the tags have to be here.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # §11: a release ships with a review packet stating what was checked and
+      # what was not. It is the one part of a release that cannot be generated,
+      # so it is the one part worth refusing to publish without.
+      - name: the review packet for this version exists
+        run: |
+          packet="docs/review/${GITHUB_REF_NAME#v}.md"
+          test -f "$packet" || {
+            echo "no $packet — PLAN.md §11 says a release ships with a review packet"
+            exit 1
+          }
+
+      # Built twice and compared, so the checksums published below are a
+      # property of the commit rather than of the run that uploaded them.
+      - run: make dist-reproducible
+
+      # The packet is the release notes. One document rather than two that
+      # describe the same release and disagree by the second one.
+      - name: publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file "docs/review/${GITHUB_REF_NAME#v}.md" \
+            dist/*.tar.gz dist/SHA256SUMS

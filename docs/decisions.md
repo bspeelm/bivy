@@ -479,3 +479,64 @@ trust. Saying it is the price of the fallback being worth having.
 
 **What would reopen this:** the feed service proving reliable enough that this
 never fires, in which case it is dead code and should go.
+
+---
+
+## ADR-014 — A release is a tag, one archive per platform, and a checksum file; nothing else distributes bivy
+
+**Status:** accepted, cutting 0.1.0. Fills the placeholder §11 left.
+
+### What prompted it
+
+§11 described a gate and then said, honestly, that there was no release process
+and that describing one that did not exist would be worse than admitting it.
+0.1.0 is the version that needs it, so this is the decision that fills it.
+
+### What a release is
+
+A tag named `v<major>.<minor>.<patch>`. It runs the same gate every commit
+runs, on both platforms, then builds an archive for each platform in
+`scripts/platforms` and publishes them with a `SHA256SUMS` file and a review
+packet as the notes. Building from source stays what it has always been: a Go
+module with one direct dependency, so `go install` needs nothing from this
+process at all.
+
+### What is refused
+
+**No package repositories.** No tap, no COPR, no AUR, no nixpkgs entry. Each is
+a channel someone has to keep current, and a package that lags is worse than no
+package: it answers "how do I install this" with a version whose bugs were
+fixed. A project with one maintainer cannot honestly promise four of them.
+
+**No install script to pipe into a shell.** It asks the reader to execute
+whatever an HTTP response happens to contain, which is the posture ADR-001
+spends its length arguing against. A program that will not read a cookie should
+not ask for that.
+
+**No signatures.** This is the uncomfortable one and it is stated rather than
+papered over: a checksum published beside its own artefact detects a corrupted
+download and nothing else. Anyone who could replace the archive could replace
+the `SHA256SUMS` next to it. The checksums are there for the transfer, not for
+authenticity, and the documentation says so in those words.
+
+### The argument against
+
+An archive is the least convenient thing to install. A package manager puts the
+binary on `PATH`, upgrades it, and removes it cleanly, and a tarball does none
+of those. Against the signing refusal: an unsigned artefact from a project
+whose pitch is that its privacy claims are checkable is a gap in exactly the
+place the pitch lives.
+
+### What survives it
+
+Reproducibility carries the weight a signature would. The archives are built
+twice from the same commit and the checksums compared before publishing, so
+anyone can rebuild from the tag and compare bytes rather than trusting the
+upload. That is a check a reader can actually run, which is more than most
+signatures get.
+
+**What would reopen this:** someone volunteering to maintain a package, which
+makes the staleness argument theirs to answer rather than a promise this
+project cannot keep. For signing, somewhere to hold a key that is not the same
+account that publishes the archive — signing with a credential stored beside
+the artefact proves only that the credential was there.
