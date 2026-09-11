@@ -8,6 +8,8 @@
 # go does not look for it.
 export GOFLAGS := -mod=readonly
 
+BINARY  := bivy
+
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.Version=$(VERSION)
 
@@ -16,7 +18,7 @@ LDFLAGS := -s -w -X main.Version=$(VERSION)
 # checkout sits is a property of a machine and not of this project.
 STANDARD_CHECK ?= ../agent-context/check.sh
 
-.PHONY: help lint vet test race budgets standard check build install integration crossbuild
+.PHONY: help lint vet test race budgets standard check build install-binary integration crossbuild clean
 
 help:
 	@echo "make check       lint, vet, race tests, budgets, standard - the gate"
@@ -25,9 +27,9 @@ help:
 	@echo "make integration go test -tags=integration - needs mpv installed"
 	@echo "make budgets     the PLAN.md §0 budgets"
 	@echo "make standard    conformance against the development standard, if present"
+	@echo "make install-binary  build it, put it on PATH, and say what is missing"
 	@echo "make build       build bivy for this machine"
 	@echo "make crossbuild  compile for every platform the project claims"
-	@echo "make install     build it and put it on PATH"
 
 lint:
 	gofmt -l . | (! grep .) || { echo "gofmt -w the files above"; exit 1; }
@@ -70,7 +72,7 @@ check: lint vet race budgets standard
 # The same flags the budget uses to measure the binary, so what is measured is
 # what runs.
 build:
-	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bivy ./cmd/bivy
+	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/bivy
 
 # A build that only ever happens on the maintainer's machine is a claim about
 # one machine. The README says Linux and macOS; this is what holds it to that.
@@ -81,6 +83,26 @@ crossbuild:
 	        go build -trimpath -o /dev/null ./... || exit 1; \
 	done
 
-install: build
-	install -Dm755 bivy $(HOME)/.local/bin/bivy
-	@echo "installed to ~/.local/bin/bivy"
+# One command to be running the version in this working tree. It reports what
+# it installed and what bivy will not be able to do without, because the two
+# halves have different dependencies and "nothing happened" is what a missing
+# one looks like.
+install-binary: build
+	install -Dm755 $(BINARY) $(HOME)/.local/bin/$(BINARY)
+	@echo
+	@echo "installed $$($(HOME)/.local/bin/$(BINARY) version) to ~/.local/bin/$(BINARY)"
+	@case ":$$PATH:" in \
+	    *":$(HOME)/.local/bin:"*) ;; \
+	    *) echo; echo "~/.local/bin is not on your PATH. Add it:"; \
+	       echo '       export PATH="$$HOME/.local/bin:$$PATH"' ;; \
+	esac
+	@command -v mpv >/dev/null 2>&1 || { echo; \
+	    echo "mpv is not installed, and bivy plays through it."; \
+	    echo "       dnf install mpv · apt install mpv · brew install mpv"; }
+	@command -v yt-dlp >/dev/null 2>&1 || { echo; \
+	    echo "yt-dlp is not installed, and search needs it. The dashboard does not."; \
+	    echo "       dnf install yt-dlp · apt install yt-dlp · brew install yt-dlp"; }
+	@echo; echo "next: $(BINARY)"
+
+clean:
+	rm -f $(BINARY)
