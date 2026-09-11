@@ -325,7 +325,9 @@ count above is the thing to watch — a fourth kind is a decision, not a detail.
   need a real mpv, a real extractor and the live network; the gate needs none
   of the three. A failure there is news about a third party rather than a
   broken diff, and a gate that reddens for reasons no diff can cause is one
-  people learn to ignore.
+  people learn to ignore. What that run cannot cover is stream resolution: the
+  address it runs from is challenged, and the remedy on offer is a cookie
+  (ADR-015). Playback is verified by hand, and every review packet says so.
 - **The prose compiler**, `docs_test.go`, which holds the README and this
   document against the files that define what they claim.
 - The floor in §0 is one test line per three code lines. It is a floor and not

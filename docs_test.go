@@ -341,6 +341,30 @@ func TestTheIntegrationTestsRunOnTheirOwnAndNotOnTheGate(t *testing.T) {
 	}
 }
 
+// No workflow hands the extractor a credential (ADR-004, ADR-015).
+//
+// The scheduled run cannot resolve a stream, because the address it runs from
+// is challenged, and the remedy the error message offers is a cookie. This is
+// the one place where the tempting fix and the founding refusal are the same
+// line of YAML.
+func TestNothingInCIGivesTheExtractorACredential(t *testing.T) {
+	dir := filepath.Join(".github", "workflows")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, e := range entries {
+		body := read(t, filepath.Join(dir, e.Name()))
+		for _, credential := range []string{"--cookies", "cookies-from-browser", "netrc"} {
+			if strings.Contains(body, credential) {
+				t.Errorf("%s passes %s; ADR-004 says bivy never authenticates, and a credential in CI is a credential in a repository",
+					e.Name(), credential)
+			}
+		}
+	}
+}
+
 // docs/review/ says in prose whether a release has happened yet. That sentence
 // is read by someone deciding whether to trust the directory, and it is the
 // kind of sentence that stays true for exactly one release.

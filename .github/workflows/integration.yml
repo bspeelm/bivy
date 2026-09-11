@@ -1,4 +1,4 @@
-# The tests that need a real mpv, a real extractor and the live network.
+# The tests that need a real mpv and the live network.
 #
 # Never on a pull request. These depend on a third party that has, in this
 # project's own history, refused every request for hours while the rest of its
@@ -38,7 +38,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y mpv xvfb
+          sudo apt-get install -y mpv
           # Not from the distribution: the extractor is the part of this stack
           # that rots fastest, and a packaged one is old by the time it lands.
           sudo curl -fsSL -o /usr/local/bin/yt-dlp \
@@ -57,26 +57,15 @@ jobs:
       # No display here, and bivy only asks for a window once something plays,
       # so the socket, the flags and the process hygiene are all covered
       # without one. The test that plays a video skips unless it is told what
-      # to play, and on macOS it is not told: a runner with no GUI session
-      # cannot open mpv's window, and a skip is the honest result.
+      # to play, and nothing here tells it.
       - run: make integration
 
-      # Asked before the player is, because the two failures look identical
-      # from inside mpv: a refused extractor and a broken player both end as
-      # "unrecognized file format", which is mpv saying it was handed a web
-      # page. Answering this separately is the difference between news about a
-      # third party and a bug in bivy.
-      - name: the extractor can still resolve a stream
-        if: runner.os == 'Linux'
-        run: yt-dlp -g -- 'https://www.youtube.com/watch?v=jNQXAC9IVRw' | head -1
-
-      # Playback for real, under a virtual display. This is the fragile step
-      # and it is deliberately last: bivy asks mpv for --vo=gpu, which here
-      # falls to software rendering, and it reaches the live service for the
-      # stream. When it breaks, read it as news rather than as a regression
-      # until the run before it is checked.
-      - name: a real video, played to its end
-        if: runner.os == 'Linux'
-        env:
-          BIVY_PLAY_TEST: jNQXAC9IVRw
-        run: xvfb-run -a go test -tags=integration -run TestRealMPVPlaysAVideoToItsEnd -v ./internal/mpv/
+      # The extractor is not exercised here, and cannot be: this address gets
+      # "Sign in to confirm you're not a bot", whose only offered remedy is
+      # cookies, which is the thing ADR-004 exists to refuse. So playback and
+      # stream resolution are verified by hand on a workstation, and the
+      # review packet for each release says so rather than implying CI covered
+      # it (ADR-015).
+      #
+      # What runs above still covers the feeds, the socket, the flag set and
+      # the process hygiene, on both platforms.
