@@ -97,6 +97,7 @@ up. Remove those two directories and bivy was never here.
 make build     build bivy for this machine
 make install   build it and put it on ~/.local/bin
 make check     lint, vet, race tests, budgets, and the standard conformance check
+make crossbuild  compile for every platform the project claims
 make test      go test
 make budgets   the PLAN.md §0 budgets, asserted
 make help      every target, with a line each

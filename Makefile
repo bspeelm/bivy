@@ -16,7 +16,7 @@ LDFLAGS := -s -w -X main.Version=$(VERSION)
 # checkout sits is a property of a machine and not of this project.
 STANDARD_CHECK ?= ../agent-context/check.sh
 
-.PHONY: help lint vet test race budgets standard check build install integration
+.PHONY: help lint vet test race budgets standard check build install integration crossbuild
 
 help:
 	@echo "make check       lint, vet, race tests, budgets, standard - the gate"
@@ -26,6 +26,7 @@ help:
 	@echo "make budgets     the PLAN.md §0 budgets"
 	@echo "make standard    conformance against the development standard, if present"
 	@echo "make build       build bivy for this machine"
+	@echo "make crossbuild  compile for every platform the project claims"
 	@echo "make install     build it and put it on PATH"
 
 lint:
@@ -70,6 +71,15 @@ check: lint vet race budgets standard
 # what runs.
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bivy ./cmd/bivy
+
+# A build that only ever happens on the maintainer's machine is a claim about
+# one machine. The README says Linux and macOS; this is what holds it to that.
+crossbuild:
+	@for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
+	    echo "  $$t"; \
+	    GOOS=$${t%/*} GOARCH=$${t#*/} CGO_ENABLED=0 \
+	        go build -trimpath -o /dev/null ./... || exit 1; \
+	done
 
 install: build
 	install -Dm755 bivy $(HOME)/.local/bin/bivy

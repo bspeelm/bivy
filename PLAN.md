@@ -326,7 +326,14 @@ count above is the thing to watch — a fourth kind is a decision, not a detail.
 ## §11 CI and release
 
 `make check` is the gate: lint, vet, race tests, budgets, then the conformance
-check. It is what CI runs and what must pass before a commit.
+check. It is what CI runs and what must pass before a commit — on Linux and on
+macOS both, because `internal/store` chooses its directories by platform and a
+branch nothing runs is a branch nobody has tried. `make crossbuild` compiles
+every platform the README claims, on every check.
+
+The conformance check skips in CI rather than failing: the development
+standard lives outside this repository and is not checked out beside it. That
+is the one part of the gate a green CI run does not prove.
 
 Releases ship with a review packet in `docs/review/`, stating what was checked
 and what was not. There is no version yet and no release process yet; this

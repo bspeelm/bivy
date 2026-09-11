@@ -160,6 +160,59 @@ func TestEveryCitedDecisionRecordExists(t *testing.T) {
 	}
 }
 
+// PLAN.md §11 says `make check` is what CI runs. It said that for two
+// milestones while there was no CI at all, which is the failure the §0
+// discipline exists to prevent applied to a sentence instead of a number.
+//
+// Held in both directions: the claim needs a workflow, and the workflow has to
+// run the target the claim names.
+func TestTheCIClaimIsBackedByAWorkflow(t *testing.T) {
+	plan := read(t, "PLAN.md")
+	if !strings.Contains(plan, "what CI runs") {
+		t.Skip("PLAN.md no longer claims CI runs the gate")
+	}
+
+	dir := filepath.Join(".github", "workflows")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("PLAN.md §11 says `make check` is what CI runs, and %s does not exist", dir)
+	}
+
+	var runsTheGate bool
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".yml") && !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		if strings.Contains(read(t, filepath.Join(dir, e.Name())), "make check") {
+			runsTheGate = true
+		}
+	}
+	if !runsTheGate {
+		t.Errorf("no workflow in %s runs `make check`, which §11 says CI runs", dir)
+	}
+}
+
+// The README names the platforms, and something has to compile for them.
+func TestEveryClaimedPlatformIsBuilt(t *testing.T) {
+	targets := makefileTargets(t)
+	if _, found := targets["crossbuild"]; !found {
+		t.Fatal("no crossbuild target; nothing compiles for the platforms the README claims")
+	}
+
+	recipe := read(t, "Makefile")
+	for _, platform := range []struct{ said, built string }{
+		{"Linux", "linux/amd64"},
+		{"macOS", "darwin/arm64"},
+	} {
+		if !strings.Contains(read(t, "README.md")+read(t, "PLAN.md"), platform.said) {
+			continue
+		}
+		if !strings.Contains(recipe, platform.built) {
+			t.Errorf("the documents claim %s and the Makefile never builds %s", platform.said, platform.built)
+		}
+	}
+}
+
 // Nothing may claim the repository has no code once it has some. The status
 // section is the first thing a reader believes and the last thing anyone
 // remembers to update.
