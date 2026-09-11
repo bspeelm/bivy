@@ -87,6 +87,10 @@ crossbuild:
 # it installed and what bivy will not be able to do without, because the two
 # halves have different dependencies and "nothing happened" is what a missing
 # one looks like.
+#
+# "on this PATH" rather than "installed": where bivy is built and where it is
+# run are not always the same machine, and a checkout that builds somewhere
+# without a player is a normal arrangement rather than a broken one.
 install-binary: build
 	install -Dm755 $(BINARY) $(HOME)/.local/bin/$(BINARY)
 	@echo
@@ -97,10 +101,10 @@ install-binary: build
 	       echo '       export PATH="$$HOME/.local/bin:$$PATH"' ;; \
 	esac
 	@command -v mpv >/dev/null 2>&1 || { echo; \
-	    echo "mpv is not installed, and bivy plays through it."; \
+	    echo "mpv is not on this PATH, and bivy plays through it."; \
 	    echo "       dnf install mpv · apt install mpv · brew install mpv"; }
 	@command -v yt-dlp >/dev/null 2>&1 || { echo; \
-	    echo "yt-dlp is not installed, and search needs it. The dashboard does not."; \
+	    echo "yt-dlp is not on this PATH, and search needs it. The dashboard does not."; \
 	    echo "       dnf install yt-dlp · apt install yt-dlp · brew install yt-dlp"; }
 	@echo; echo "next: $(BINARY)"
 
