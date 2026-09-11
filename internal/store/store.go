@@ -33,9 +33,8 @@ type Store struct {
 	DataDir   string
 }
 
-// Open locates the two directories. It does not create them: a command that
-// only reads should not leave a directory behind on a machine where bivy has
-// never run.
+// Open locates the two directories without creating them: a command that only
+// reads should leave nothing behind on a machine where bivy has never run.
 func Open() (*Store, error) {
 	config, err := baseDir("XDG_CONFIG_HOME", configFallback)
 	if err != nil {

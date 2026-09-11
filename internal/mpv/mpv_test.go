@@ -39,8 +39,25 @@ func standIn(t *testing.T, behaviour string) Options {
 		Binary:     self,
 		Args:       []string{"-test.run=TestStandInProcess", "--"},
 		Env:        append(os.Environ(), standInEnv+"="+behaviour),
-		RuntimeDir: t.TempDir(),
+		RuntimeDir: shortTempDir(t),
 	}
+}
+
+// shortTempDir is t.TempDir with the test's name left out of the path.
+//
+// t.TempDir spells the test name into the directory, and a unix socket path
+// may not exceed about a hundred bytes. On a Mac the temporary directory is
+// fifty of those before anything is added, so a descriptively named test
+// cannot open a socket at all — which arrives as mpv exiting for no stated
+// reason, nowhere near the cause.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }
 
 // TestStandInProcess is not a test. It is the stand-in mpv, and it returns
@@ -252,7 +269,7 @@ func contains(haystack []string, needle string) bool {
 // A promise of no residue includes the socket. It is the one thing bivy writes
 // outside the two directories in §8, and it is gone when bivy is.
 func TestCloseRemovesTheSocketDirectory(t *testing.T) {
-	runtime := t.TempDir()
+	runtime := shortTempDir(t)
 
 	opt := standIn(t, "idle")
 	opt.RuntimeDir = runtime
@@ -297,7 +314,7 @@ func TestCloseRemovesTheSocketDirectory(t *testing.T) {
 // exits when its connection closes, which hid it: only asking the stand-in
 // what it was actually told shows the difference.
 func TestClosingAsksMPVToQuitRatherThanKillingIt(t *testing.T) {
-	marker := filepath.Join(t.TempDir(), "quit-received")
+	marker := filepath.Join(shortTempDir(t), "quit-received")
 
 	opt := standIn(t, "idle")
 	opt.Env = append(opt.Env, quitMarkerEnv+"="+marker)
@@ -365,10 +382,34 @@ func TestAPlayerThatNeverListensIsReportedQuickly(t *testing.T) {
 	}
 }
 
+// A socket path too long to bind arrives as mpv exiting without saying why,
+// and the cause is nowhere near the symptom. It is checked before the process
+// is started so the message names the real problem.
+func TestAnOverlongSocketPathIsReportedAsItself(t *testing.T) {
+	deep := filepath.Join(shortTempDir(t), strings.Repeat("d", 120))
+	if err := os.MkdirAll(deep, dirPerm); err != nil {
+		t.Skipf("this filesystem will not make a path that long: %v", err)
+	}
+
+	opt := standIn(t, "idle")
+	opt.RuntimeDir = deep
+
+	_, err := Start(context.Background(), opt)
+	if err == nil {
+		t.Fatal("an unusable socket path started a player")
+	}
+	if !strings.Contains(err.Error(), "unix socket") {
+		t.Errorf("error = %v, want it to name the socket path limit", err)
+	}
+	if strings.Contains(err.Error(), "exited") {
+		t.Errorf("error = %v, which blames mpv for a path bivy chose", err)
+	}
+}
+
 func TestStartReportsAMissingBinary(t *testing.T) {
 	_, err := Start(context.Background(), Options{
 		Binary:     filepath.Join(t.TempDir(), "no-such-mpv"),
-		RuntimeDir: t.TempDir(),
+		RuntimeDir: shortTempDir(t),
 	})
 	if err == nil {
 		t.Fatal("starting a binary that does not exist reported success")
@@ -377,7 +418,7 @@ func TestStartReportsAMissingBinary(t *testing.T) {
 
 // A failed start leaves nothing behind either.
 func TestAFailedStartRemovesItsDirectory(t *testing.T) {
-	runtime := t.TempDir()
+	runtime := shortTempDir(t)
 
 	if _, err := Start(context.Background(), Options{
 		Binary:     filepath.Join(t.TempDir(), "no-such-mpv"),
