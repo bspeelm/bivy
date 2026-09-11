@@ -29,14 +29,30 @@ type Video struct {
 // feed chose, and this one is built from an identifier that has been checked.
 func (v Video) URL() string { return "https://www.youtube.com/watch?v=" + v.ID }
 
-// ThumbnailURL is derived from the identifier rather than taken from whatever
-// supplied the entry, so that a hostile feed or extractor cannot aim the fetch
-// at a host of its choosing.
-func ThumbnailURL(videoID string) string {
+// ThumbnailURLs is where a video's picture might be, best first. Derived from
+// the identifier rather than taken from whatever supplied the entry, so a
+// hostile feed or extractor cannot aim the fetch.
+//
+// hq720 is widescreen, and the shape a video actually is. hqdefault is
+// four-by-three with bars painted top and bottom, and a third of the
+// resolution — the fallback, because older videos have only that one.
+func ThumbnailURLs(videoID string) []string {
 	if !IsVideoID(videoID) {
-		return ""
+		return nil
 	}
-	return "https://i.ytimg.com/vi/" + videoID + "/hqdefault.jpg"
+	const host = "https://i.ytimg.com/vi/"
+	return []string{
+		host + videoID + "/hq720.jpg",
+		host + videoID + "/hqdefault.jpg",
+	}
+}
+
+// ThumbnailURL is the best address for a video's picture.
+func ThumbnailURL(videoID string) string {
+	if urls := ThumbnailURLs(videoID); len(urls) > 0 {
+		return urls[0]
+	}
+	return ""
 }
 
 // Channel is a channel: the entries its feed currently carries when it came

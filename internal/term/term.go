@@ -76,6 +76,7 @@ type Terminal struct {
 	out      *os.File
 	state    *term.State
 	graphics graphics.Capability
+	cell     graphics.Cell
 	// art is what is on screen, so an unchanged picture is not sent again.
 	art     string
 	artRow  int
@@ -118,6 +119,11 @@ func Open(in, out *os.File) (*Terminal, error) {
 	// Before the key reader starts, so the answer is read by the probe rather
 	// than decoded as somebody typing.
 	t.graphics = graphics.Probe(in, out)
+	if t.graphics == graphics.Kitty {
+		// Only where a picture might be drawn, and before the key reader
+		// starts so the answer is not read as somebody typing.
+		t.cell = graphics.CellSize(in, out)
+	}
 
 	go t.readKeys()
 	go t.watchResize()
@@ -126,6 +132,10 @@ func Open(in, out *os.File) (*Terminal, error) {
 
 // Graphics is what the terminal said it could draw, asked once on open.
 func (t *Terminal) Graphics() graphics.Capability { return t.graphics }
+
+// Cell is how big one cell is in pixels, as the terminal reported it. The
+// zero value means it would not say.
+func (t *Terminal) Cell() graphics.Cell { return t.cell }
 
 // Close restores the terminal to exactly how it was found. Safe to call twice,
 // and it must be: this runs from a deferred call on the ordinary path and a

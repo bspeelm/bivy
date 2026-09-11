@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bspeelm/bivy/internal/follow"
+	"github.com/bspeelm/bivy/internal/graphics"
 	"github.com/bspeelm/bivy/internal/media"
 )
 
@@ -552,7 +553,7 @@ func TestTheChannelListOffersFollowNotPlay(t *testing.T) {
 func TestThePictureScalesWithTheWindow(t *testing.T) {
 	var previous int
 	for _, width := range []int{80, 120, 160, 200} {
-		cols, rows := ArtBox(width, 40)
+		cols, rows := ArtBox(width, 40, graphics.Assumed)
 		if cols == 0 {
 			t.Fatalf("no picture at width %d", width)
 		}
@@ -578,7 +579,7 @@ func TestThePictureScalesWithTheWindow(t *testing.T) {
 // titles out.
 func TestNoPictureWhereThereIsNoRoom(t *testing.T) {
 	for _, size := range [][2]int{{40, 24}, {80, 8}, {30, 30}, {0, 0}} {
-		if cols, rows := ArtBox(size[0], size[1]); cols != 0 || rows != 0 {
+		if cols, rows := ArtBox(size[0], size[1], graphics.Assumed); cols != 0 || rows != 0 {
 			t.Errorf("a %dx%d window got a %dx%d picture", size[0], size[1], cols, rows)
 		}
 	}
@@ -670,7 +671,7 @@ func TestThePictureSitsInTheMiddleOfItsPane(t *testing.T) {
 		Interactive: true, Art: "<PIC>",
 	}
 
-	_, artRows := ArtBox(100, 40)
+	_, artRows := ArtBox(100, 40, graphics.Assumed)
 	visible := d.visibleRows()
 	if want := 3 + (visible-artRows)/2; d.ArtRow() != want {
 		t.Errorf("ArtRow = %d, want %d (%d rows of list, %d of picture)",
@@ -732,5 +733,42 @@ func TestAFrameIsExactlyTheHeightOfItsWindow(t *testing.T) {
 			t.Errorf("a %dx%d window with %d rows (art %v, typing %v) rendered %d lines, want %d",
 				c.width, c.height, c.rows, c.art != "", c.typing, got, c.height)
 		}
+	}
+}
+
+// A cell belongs to the font. A picture sized for cells twice as tall as they
+// are wide, drawn in a font where they are half that, is stretched sideways —
+// the protocol fills the cells it is told about whatever shape the image was.
+func TestTheRowCountFollowsTheTerminalsCells(t *testing.T) {
+	tall := graphics.Cell{Width: 8, Height: 16}
+	square := graphics.Cell{Width: 10, Height: 14}
+
+	_, tallRows := ArtBox(120, 40, tall)
+	_, squareRows := ArtBox(120, 40, square)
+
+	if tallRows >= squareRows {
+		t.Errorf("a picture is %d rows in tall cells and %d in squarer ones; "+
+			"squarer cells need more rows for the same shape", tallRows, squareRows)
+	}
+
+	// The picture keeps its shape in both: columns times cell width over rows
+	// times cell height should be about sixteen to nine.
+	for _, c := range []struct {
+		name string
+		cell graphics.Cell
+	}{{"tall", tall}, {"square", square}} {
+		cols, rows := ArtBox(120, 40, c.cell)
+		got := float64(cols*c.cell.Width) / float64(rows*c.cell.Height)
+		if got < 1.5 || got > 2.1 {
+			t.Errorf("in %s cells a %dx%d picture is %.2f wide for its height, want about 1.78",
+				c.name, cols, rows, got)
+		}
+	}
+}
+
+// An unknown cell size falls back rather than dividing by zero.
+func TestArtBoxWithoutACellSize(t *testing.T) {
+	if cols, rows := ArtBox(120, 40, graphics.Cell{}); cols == 0 || rows == 0 {
+		t.Errorf("ArtBox with no cell size gave %dx%d", cols, rows)
 	}
 }

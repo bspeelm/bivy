@@ -45,6 +45,7 @@ func newScreen() *fakeScreen {
 }
 
 func (s *fakeScreen) Graphics() graphics.Capability { return s.draws }
+func (s *fakeScreen) Cell() graphics.Cell           { return graphics.Assumed }
 func (s *fakeScreen) Keys() <-chan term.Press       { return s.keys }
 func (s *fakeScreen) Resized() <-chan struct{}      { return s.resizes }
 
@@ -183,7 +184,7 @@ func (a *fakeArt) Fetch(_ context.Context, videoID string) ([]byte, error) {
 	return []byte("picture of " + videoID), nil
 }
 
-func (a *fakeArt) Draw(data []byte, cols, rows int) (string, error) {
+func (a *fakeArt) Draw(data []byte, cols, rows int, cell graphics.Cell) (string, error) {
 	return fmt.Sprintf("<art %dx%d %s>", cols, rows, data), nil
 }
 
@@ -1425,11 +1426,11 @@ func TestThePictureIsRedrawnWhenTheWindowChanges(t *testing.T) {
 	b.run(t, "follow", chanA)
 
 	b.start(t)
-	cols, _ := tui.ArtBox(b.screen.width(), 24)
+	cols, _ := tui.ArtBox(b.screen.width(), 24, graphics.Assumed)
 	b.eventuallyArt(t, fmt.Sprintf("<art %dx", cols))
 
 	b.screen.resize(140, 40)
-	wider, _ := tui.ArtBox(140, 40)
+	wider, _ := tui.ArtBox(140, 40, graphics.Assumed)
 	if wider == cols {
 		t.Skip("the two window sizes ask for the same picture")
 	}

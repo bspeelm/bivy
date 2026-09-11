@@ -36,8 +36,9 @@ type player interface {
 type artist interface {
 	// Fetch returns a video's picture as the bytes a server sent.
 	Fetch(ctx context.Context, videoID string) ([]byte, error)
-	// Draw turns those bytes into what the terminal understands.
-	Draw(data []byte, cols, rows int) (string, error)
+	// Draw turns those bytes into what the terminal understands, for cells of
+	// the size the terminal said they are.
+	Draw(data []byte, cols, rows int, cell graphics.Cell) (string, error)
 }
 
 // pictures is the real artist: feed fetches, graphics draws.
@@ -47,13 +48,14 @@ func (p pictures) Fetch(ctx context.Context, videoID string) ([]byte, error) {
 	return p.feeds.Thumbnail(ctx, videoID)
 }
 
-func (p pictures) Draw(data []byte, cols, rows int) (string, error) {
-	return graphics.Render(data, cols, rows)
+func (p pictures) Draw(data []byte, cols, rows int, cell graphics.Cell) (string, error) {
+	return graphics.Render(data, cols, rows, cell)
 }
 
 // screen is what the browser needs from a terminal.
 type screen interface {
 	Graphics() graphics.Capability
+	Cell() graphics.Cell
 	Size() (width, height int)
 	Draw(frame string) error
 	DrawArt(row int, art string) error
@@ -845,7 +847,7 @@ func (b *browser) failedNow() []string {
 
 // picture is the drawn thumbnail for the row under the cursor: what is worth
 // a request is what somebody is looking at.
-func (b *browser) picture(ctx context.Context, cols, rows int) string {
+func (b *browser) picture(ctx context.Context, cols, rows int, cell graphics.Cell) string {
 	if b.app.art == nil || cols < 1 || rows < 1 || b.selected >= len(b.rows) {
 		return ""
 	}
@@ -871,7 +873,7 @@ func (b *browser) picture(ctx context.Context, cols, rows int) string {
 		b.remember(id, data)
 	}
 
-	drawn, err := b.app.art.Draw(data, cols, rows)
+	drawn, err := b.app.art.Draw(data, cols, rows, cell)
 	if err != nil {
 		drawn = ""
 	}
@@ -902,9 +904,11 @@ func (b *browser) remember(id string, data []byte) {
 
 func (b *browser) draw() error {
 	width, height := b.screen.Size()
-	cols, rows := tui.ArtBox(width, height)
+	cell := b.screen.Cell()
+	cols, rows := tui.ArtBox(width, height, cell)
 	model := tui.Dashboard{
-		Art:         b.picture(context.Background(), cols, rows),
+		Art:         b.picture(context.Background(), cols, rows, cell),
+		Cell:        cell,
 		Rows:        b.rows,
 		Failed:      b.failedNow(),
 		Reached:     len(b.fetched),

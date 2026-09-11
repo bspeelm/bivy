@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bspeelm/bivy/internal/follow"
+	"github.com/bspeelm/bivy/internal/graphics"
 	"github.com/bspeelm/bivy/internal/media"
 )
 
@@ -77,6 +78,8 @@ type Dashboard struct {
 	// what the terminal draws — sized by ArtBox of this frame's own width and
 	// height, so it fits the window it is in.
 	Art string
+	// Cell decides how many rows a picture of a given width occupies.
+	Cell graphics.Cell
 	// Interactive draws the cursor, the frame and the key hints. Without it
 	// the same model renders as a plain listing, which is what a pipe gets.
 	Interactive bool
@@ -218,14 +221,21 @@ func (d Dashboard) visibleRows() int {
 // where there is no room worth the space. A quarter of the width, bounded: one
 // that grows without limit takes the screen from what it illustrates, and one
 // that never grows is a stamp on a large display.
-func ArtBox(width, height int) (cols, rows int) {
+func ArtBox(width, height int, cell graphics.Cell) (cols, rows int) {
 	if width < minWidth+minList || height < minHeight {
 		return 0, 0
+	}
+	if !cell.Known() {
+		cell = graphics.Assumed
 	}
 
 	cols = width / 3
 	cols = min(max(cols, minArtCols), maxArtCols)
-	rows = cols * 9 / 16 / 2
+
+	// How many rows a sixteen-by-nine picture that wide occupies in this
+	// terminal's cells rather than assumed ones. Getting it wrong is what
+	// stretches a picture.
+	rows = cols * cell.Width * 9 / (16 * cell.Height)
 
 	if rows < 3 || height-chromeLines-rows < 2 {
 		return 0, 0
@@ -247,7 +257,7 @@ func (d Dashboard) artPane() (cols, rows int) {
 	if d.Art == "" || !d.Interactive {
 		return 0, 0
 	}
-	return ArtBox(d.Width, d.Height)
+	return ArtBox(d.Width, d.Height, d.Cell)
 }
 
 // heading is what this screen is, after the program's name.
