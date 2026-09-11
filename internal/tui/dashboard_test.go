@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func golden(t *testing.T, name, got string) {
 	}
 }
 
-func row(channel, title string, ago time.Duration, fresh bool) follow.Row {
+func videoRow(channel, title string, ago time.Duration, fresh bool) follow.Row {
 	return follow.Row{
 		Video:   media.Video{ID: "aaaaaaaaaaa", Title: title, Published: now.Add(-ago)},
 		Channel: channel,
@@ -53,7 +54,7 @@ func row(channel, title string, ago time.Duration, fresh bool) follow.Row {
 }
 
 func watchedRow(channel, title string, ago time.Duration) follow.Row {
-	r := row(channel, title, ago, true)
+	r := videoRow(channel, title, ago, true)
 	r.Watched = true
 	return r
 }
@@ -70,7 +71,7 @@ func resultRow(channel, title string, length time.Duration) follow.Row {
 func manyRows(n int) []follow.Row {
 	var rows []follow.Row
 	for i := range n {
-		rows = append(rows, row("Aye", fmt.Sprintf("Video number %d", i), time.Duration(i)*time.Hour, i < 3))
+		rows = append(rows, videoRow("Aye", fmt.Sprintf("Video number %d", i), time.Duration(i)*time.Hour, i < 3))
 	}
 	return rows
 }
@@ -82,35 +83,35 @@ func TestRenderDashboard(t *testing.T) {
 	}{
 		{"empty", Dashboard{Now: now}},
 		{"mixed", Dashboard{Now: now, Rows: []follow.Row{
-			row("Aye", "The newest thing that happened", 2*time.Hour, true),
-			row("Bee", "Something from yesterday", 26*time.Hour, true),
-			row("Aye", "Older, and already seen", 5*24*time.Hour, false),
+			videoRow("Aye", "The newest thing that happened", 2*time.Hour, true),
+			videoRow("Bee", "Something from yesterday", 26*time.Hour, true),
+			videoRow("Aye", "Older, and already seen", 5*24*time.Hour, false),
 		}}},
 		{"nothing new", Dashboard{Now: now, Rows: []follow.Row{
-			row("Aye", "All of this was here last time", 9*24*time.Hour, false),
+			videoRow("Aye", "All of this was here last time", 9*24*time.Hour, false),
 		}}},
 		{"one new", Dashboard{Now: now, Rows: []follow.Row{
-			row("Aye", "Just the one", 30*time.Minute, true),
+			videoRow("Aye", "Just the one", 30*time.Minute, true),
 		}}},
 		{"a channel could not be reached", Dashboard{Now: now, Failed: []string{"Bee"}, Rows: []follow.Row{
-			row("Aye", "This one arrived", time.Hour, true),
+			videoRow("Aye", "This one arrived", time.Hour, true),
 		}}},
 		{"everything failed", Dashboard{Now: now, Failed: []string{"Aye", "Bee"}}},
 		{"long names are truncated", Dashboard{Now: now, Rows: []follow.Row{
-			row("A Channel With A Very Long Name Indeed",
+			videoRow("A Channel With A Very Long Name Indeed",
 				"A title that runs well past the width a terminal gives it and keeps going",
 				time.Hour, true),
 		}}},
 		{"narrow", Dashboard{Now: now, Width: 46, Rows: []follow.Row{
-			row("Aye", "A title that has to be cut to fit", time.Hour, true),
+			videoRow("Aye", "A title that has to be cut to fit", time.Hour, true),
 		}}},
 		{"interactive", Dashboard{Now: now, Interactive: true, Selected: 1, Rows: []follow.Row{
-			row("Aye", "The newest thing that happened", 2*time.Hour, true),
-			row("Bee", "The one under the cursor", 26*time.Hour, true),
+			videoRow("Aye", "The newest thing that happened", 2*time.Hour, true),
+			videoRow("Bee", "The one under the cursor", 26*time.Hour, true),
 			watchedRow("Aye", "One that has been watched", 5*24*time.Hour),
 		}}},
 		{"playing", Dashboard{Now: now, Interactive: true, Status: "playing · The one under the cursor", Rows: []follow.Row{
-			row("Aye", "The one under the cursor", 2*time.Hour, true),
+			videoRow("Aye", "The one under the cursor", 2*time.Hour, true),
 		}}},
 		{"scrolled", Dashboard{Now: now, Interactive: true, Height: 10, Selected: 12, Rows: manyRows(30)}},
 		{"typing a search", Dashboard{Now: now, Interactive: true, Typing: true, Line: "search terminal video", Rows: manyRows(5)}},
@@ -135,19 +136,22 @@ func TestRenderDashboard(t *testing.T) {
 func TestRenderStaysInsideItsWidth(t *testing.T) {
 	for _, width := range []int{0, 46, 60, 80, 120} {
 		d := Dashboard{Now: now, Width: width, Failed: []string{"A Channel That Was Unreachable"}, Rows: []follow.Row{
-			row("A Channel With A Very Long Name Indeed",
+			videoRow("A Channel With A Very Long Name Indeed",
 				"A title that runs well past the width a terminal gives it and then keeps on going for a while",
 				time.Hour, true),
-			row("Bee", "Short", 3*time.Hour, false),
+			videoRow("Bee", "Short", 3*time.Hour, false),
 		}}
 
 		limit := width
 		if limit < minWidth {
 			limit = defaultWidth
 		}
+		// Measured with the attributes taken off. An escape sequence occupies
+		// no cells, and counting it as though it did would make this test pass
+		// by accident on a line that overflows.
 		for _, line := range strings.Split(Render(d), "\n") {
-			if n := len([]rune(line)); n > limit {
-				t.Errorf("at width %d a line is %d wide:\n%s", width, n, line)
+			if n := len([]rune(plain(line))); n > limit {
+				t.Errorf("at width %d a line is %d wide:\n%s", width, n, plain(line))
 			}
 		}
 	}
@@ -204,8 +208,8 @@ func TestAgoFitsItsColumn(t *testing.T) {
 		-time.Hour, time.Second, 59 * time.Minute, 23 * time.Hour,
 		6 * 24 * time.Hour, 51 * 7 * 24 * time.Hour, 4000 * 24 * time.Hour,
 	} {
-		if got := Ago(now, now.Add(-d)); len(got) > agoWidth {
-			t.Errorf("Ago(-%s) = %q, which is %d wide and the column is %d", d, got, len(got), agoWidth)
+		if got := Ago(now, now.Add(-d)); len([]rune(got)) > 7 {
+			t.Errorf("Ago(-%s) = %q, which is %d wide; it shares a line with a title", d, got, len([]rune(got)))
 		}
 	}
 }
@@ -213,16 +217,16 @@ func TestAgoFitsItsColumn(t *testing.T) {
 // Watched outranks new. Something already watched is not news, whenever it
 // arrived, and a row that claims both says nothing.
 func TestWatchedOutranksNew(t *testing.T) {
-	both := row("Aye", "Seen it", time.Hour, true)
+	both := videoRow("Aye", "Seen it", time.Hour, true)
 	both.Watched = true
 
-	if got, want := marker(both), " ✓ "; got != want {
+	if got, want := marker(both), "✓"; got != want {
 		t.Errorf("marker = %q, want %q", got, want)
 	}
-	if got, want := marker(row("Aye", "Fresh", time.Hour, true)), " • "; got != want {
+	if got, want := marker(videoRow("Aye", "Fresh", time.Hour, true)), "•"; got != want {
 		t.Errorf("marker = %q, want %q", got, want)
 	}
-	if got, want := marker(row("Aye", "Old", time.Hour, false)), "   "; got != want {
+	if got, want := marker(videoRow("Aye", "Old", time.Hour, false)), " "; got != want {
 		t.Errorf("marker = %q, want %q", got, want)
 	}
 }
@@ -253,10 +257,10 @@ func TestMoveStaysInsideTheList(t *testing.T) {
 // The cursor stays put and the list moves under it, so a row that was next to
 // the cursor before a keypress is still next to it after one.
 func TestTheWindowKeepsTheCursorInIt(t *testing.T) {
-	const rows, height = 30, 12
+	const rows, visible = 30, 8
 
 	for selected := range rows {
-		first, last := window(selected, rows, height)
+		first, last := window(selected, rows, visible)
 
 		if selected < first || selected >= last {
 			t.Errorf("row %d is outside the window %d-%d", selected, first, last)
@@ -264,7 +268,7 @@ func TestTheWindowKeepsTheCursorInIt(t *testing.T) {
 		if first < 0 || last > rows {
 			t.Errorf("window %d-%d is outside the list of %d", first, last, rows)
 		}
-		if got, want := last-first, height-chrome; got != want {
+		if got, want := last-first, visible; got != want {
 			t.Errorf("window at %d shows %d rows, want %d", selected, got, want)
 		}
 	}
@@ -285,10 +289,10 @@ func TestAShortListIsNotWindowed(t *testing.T) {
 // A terminal can be two rows tall. Refusing to draw is worse than drawing one
 // row, and a negative slice index is worse than both.
 func TestAnAbsurdlyShortTerminalStillDraws(t *testing.T) {
-	for height := 1; height <= chrome+1; height++ {
-		first, last := window(5, 30, height)
+	for visible := 1; visible <= 6; visible++ {
+		first, last := window(5, 30, visible)
 		if first < 0 || last > 30 || first >= last {
-			t.Errorf("at height %d the window is %d-%d", height, first, last)
+			t.Errorf("with %d visible rows the window is %d-%d", visible, first, last)
 		}
 	}
 
@@ -358,45 +362,43 @@ func TestLengthFitsItsColumn(t *testing.T) {
 		time.Hour, 12*time.Hour + 34*time.Minute + 56*time.Second,
 		400 * time.Hour,
 	} {
-		if got := Length(d); len(got) > agoWidth {
-			t.Errorf("Length(%s) = %q, which is %d wide and the column is %d", d, got, len(got), agoWidth)
+		if got := Length(d); len([]rune(got)) > 7 {
+			t.Errorf("Length(%s) = %q, which is %d wide; it shares a line with a title", d, got, len([]rune(got)))
 		}
 	}
 }
 
 // The search box has to show what has been typed, including nothing.
 func TestTheSearchPromptShowsTheQuery(t *testing.T) {
-	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true, Line: "search cats"})
-	if !strings.Contains(frame, ":search cats") {
-		t.Errorf("the prompt does not show the query:\n%s", frame)
-	}
-	if !strings.Contains(frame, "esc cancel") {
-		t.Errorf("the prompt does not say how to get out:\n%s", frame)
+	frame := plain(Render(Dashboard{Now: now, Interactive: true, Typing: true, Line: "search cats"}))
+	if !strings.Contains(frame, ":search cats█") {
+		t.Errorf("the command line does not show what was typed:\n%s", frame)
 	}
 
-	empty := Render(Dashboard{Now: now, Interactive: true, Typing: true})
-	if !strings.Contains(empty, ":") {
-		t.Errorf("an empty prompt does not show:\n%s", empty)
+	empty := plain(Render(Dashboard{Now: now, Interactive: true, Typing: true}))
+	if !strings.Contains(empty, ":█") {
+		t.Errorf("an empty command line does not show its cursor:\n%s", empty)
 	}
 }
 
-// While typing, the rows underneath are not drawn: the list about to be
-// replaced is not a list anyone is choosing from.
-func TestTypingHidesTheRowsBeneathIt(t *testing.T) {
-	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true, Line: "search x", Rows: manyRows(5)})
-	if strings.Contains(frame, "Video number") {
-		t.Errorf("rows were drawn under the search prompt:\n%s", frame)
+// The rows stay on screen while the command line is open. A command acts on
+// what is in front of the user, and `:follow` in particular is about a channel
+// they are looking at.
+func TestTypingKeepsTheRowsVisible(t *testing.T) {
+	frame := plain(Render(Dashboard{Now: now, Interactive: true, Height: 20, Typing: true, Line: "search x", Rows: manyRows(5)}))
+	if !strings.Contains(frame, "Video number") {
+		t.Errorf("the rows vanished when the command line opened:\n%s", frame)
 	}
 }
 
 // A search that found nothing says so, rather than showing the empty-dashboard
 // advice to follow a channel.
 func TestASearchThatFoundNothingSaysSo(t *testing.T) {
-	frame := Render(Dashboard{Now: now, Interactive: true, Query: "asdfghjkl"})
-	if !strings.Contains(frame, "Nothing found") {
+	frame := plain(Render(Dashboard{Now: now, Interactive: true, Query: "asdfghjkl"}))
+	if !strings.Contains(frame, "nothing found for asdfghjkl") {
 		t.Errorf("a fruitless search does not say so:\n%s", frame)
 	}
-	if strings.Contains(frame, "bivy follow") {
+	if strings.Contains(frame, "nothing followed yet") {
 		t.Errorf("a fruitless search offered the empty-dashboard advice:\n%s", frame)
 	}
 }
@@ -412,7 +414,6 @@ func TestTheHintsOfferOnlyKeysThatWouldDoSomething(t *testing.T) {
 	}{
 		{"an empty dashboard", Dashboard{Interactive: true}, "enter play", "/ search"},
 		{"a search with no results", Dashboard{Interactive: true, Query: "x"}, "enter play", "esc back"},
-		{"while typing", Dashboard{Interactive: true, Typing: true}, "↑↓ move", "esc cancel"},
 		{"results", Dashboard{Interactive: true, Query: "x", Rows: manyRows(2)}, "r refresh", "enter play"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -429,38 +430,45 @@ func TestTheHintsOfferOnlyKeysThatWouldDoSomething(t *testing.T) {
 
 // "showing 1-0 of 5" is arithmetic rather than information.
 func TestNoWindowCountWhenNoRowsAreDrawn(t *testing.T) {
-	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true, Line: "search x", Rows: manyRows(5)})
+	frame := plain(Render(Dashboard{Now: now, Interactive: true, Typing: true, Line: "search x", Rows: manyRows(5)}))
 	if strings.Contains(frame, "showing") {
 		t.Errorf("a window count was drawn with no window:\n%s", frame)
 	}
 }
 
+// plain is a rendered frame with its attributes removed, for the tests that
+// are about what it says rather than how it looks.
+var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func plain(frame string) string { return ansi.ReplaceAllString(frame, "") }
+
 // The completion list is the half of the bargain that makes a command line
 // bearable: it shows what exists rather than asking anyone to remember.
 func TestTheCommandLineShowsWhatExists(t *testing.T) {
-	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true})
+	frame := plain(Render(Dashboard{Now: now, Interactive: true, Typing: true}))
 	for _, c := range Commands {
 		if !strings.Contains(frame, c.Name) {
 			t.Errorf("the empty command line does not list %q:\n%s", c.Name, frame)
 		}
-		if !strings.Contains(frame, c.Summary) {
-			t.Errorf("the empty command line does not summarise %q", c.Name)
-		}
 	}
 
-	// Narrowing narrows the list.
-	narrowed := Render(Dashboard{Now: now, Interactive: true, Typing: true, Line: "f"})
-	if !strings.Contains(narrowed, "follow") {
-		t.Errorf("narrowing to \"f\" lost follow:\n%s", narrowed)
+	// Narrowed to one, it says what that command does — the ones taking no
+	// argument would otherwise never explain themselves at any point.
+	one := plain(Render(Dashboard{Now: now, Interactive: true, Typing: true, Line: "f"}))
+	if !strings.Contains(one, "follow") {
+		t.Errorf("narrowing to \"f\" lost follow:\n%s", one)
 	}
-	if strings.Contains(narrowed, "quit") {
-		t.Errorf("narrowing to \"f\" still offers quit:\n%s", narrowed)
+	if !strings.Contains(one, "add a channel") {
+		t.Errorf("narrowed to one command, it does not say what it does:\n%s", one)
+	}
+	if strings.Contains(one, "quit") {
+		t.Errorf("narrowing to \"f\" still offers quit:\n%s", one)
 	}
 }
 
 func TestACommandLineWithNoMatchesSaysSo(t *testing.T) {
-	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true, Line: "xyzzy"})
-	if !strings.Contains(frame, "nothing by that name") {
+	frame := plain(Render(Dashboard{Now: now, Interactive: true, Typing: true, Line: "xyzzy"}))
+	if !strings.Contains(frame, "no command starts with that") {
 		t.Errorf("a line matching nothing does not say so:\n%s", frame)
 	}
 }

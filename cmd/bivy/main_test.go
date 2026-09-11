@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -529,9 +530,14 @@ func someRows() []follow.Row {
 	}}
 }
 
-// The hint line is the last non-empty line of a rendered screen.
+// The hint line is the last non-empty line of a rendered screen, with its
+// attributes taken off: this test is about what the screen says, not how it
+// looks.
+var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
 func hintLine(t *testing.T, frame string) string {
 	t.Helper()
+	frame = ansi.ReplaceAllString(frame, "")
 	lines := strings.Split(strings.TrimRight(frame, "\n"), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.TrimSpace(lines[i]) != "" {

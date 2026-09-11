@@ -542,7 +542,7 @@ func TestPlayingWithAnEmptyDashboard(t *testing.T) {
 	b := newBrowser(t)
 
 	b.start(t)
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.screen.press(named(term.KeyEnter), named(term.KeyDown), named(term.KeyEnter))
 	b.quit(t)
 
@@ -558,7 +558,7 @@ func TestQDoesNotQuitTheList(t *testing.T) {
 	b := newBrowser(t)
 
 	b.start(t)
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.screen.press(key('q'))
 
 	select {
@@ -574,7 +574,7 @@ func TestColonQQuits(t *testing.T) {
 	b := newBrowser(t)
 
 	b.start(t)
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.screen.press(key(':'))
 	b.screen.typed("q")
 	b.screen.press(named(term.KeyEnter))
@@ -591,7 +591,7 @@ func TestQDoesNotQuitFromTheSearchBox(t *testing.T) {
 	b := newBrowser(t)
 
 	b.start(t)
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.screen.press(key('/'))
 	b.screen.typed("q")
 	b.eventually(t, ":search q")
@@ -618,7 +618,7 @@ func TestSearchReplacesTheListAndPlaysTheSameWay(t *testing.T) {
 	b.screen.press(named(term.KeyEnter))
 
 	b.eventually(t, "A Search Result")
-	b.eventually(t, "2 results for terminal video")
+	b.eventually(t, `2 results for "terminal video"`)
 	if strings.Contains(b.screen.last(), "The newest thing") {
 		t.Error("the dashboard rows are still on screen behind the results")
 	}
@@ -664,20 +664,20 @@ func TestBackspaceInTheSearchBox(t *testing.T) {
 	b := newBrowser(t)
 
 	b.start(t)
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.screen.press(key('/'))
 	b.screen.typed("cats")
 	b.eventually(t, ":search cats")
 
 	b.screen.press(named(term.KeyBackspace), named(term.KeyBackspace))
-	b.eventually(t, ":search ca_")
+	b.eventually(t, ":search ca█")
 
 	// Backspacing past the start eats the command name too — it is one line,
 	// not a box with a label on it — and then stops rather than crashing.
 	for range 20 {
 		b.screen.press(named(term.KeyBackspace))
 	}
-	b.eventually(t, ":_")
+	b.eventually(t, ":█")
 	b.quit(t)
 }
 
@@ -687,7 +687,7 @@ func TestTheSearchBoxStopsAtItsLimit(t *testing.T) {
 	b := newBrowser(t)
 
 	br := b.start(t)
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.screen.press(key('/'))
 	b.screen.typed(strings.Repeat("a", queryLimit+20))
 	b.eventually(t, ":search "+strings.Repeat("a", 40))
@@ -774,7 +774,7 @@ func TestAMissingExtractorSaysWhatIsAffected(t *testing.T) {
 	b.finder.fail(ytdlp.ErrNotInstalled)
 
 	b.start(t)
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.screen.press(key('/'))
 	b.screen.typed("cats")
 	b.screen.press(named(term.KeyEnter))
@@ -789,7 +789,7 @@ func TestAFailedSearchIsReportedOnScreen(t *testing.T) {
 	b.finder.fail(errors.New("the search failed: Sign in to confirm you are not a bot"))
 
 	b.start(t)
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.screen.press(key('/'))
 	b.screen.typed("cats")
 	b.screen.press(named(term.KeyEnter))
@@ -854,7 +854,7 @@ func TestFollowAChannelByTheNameOnScreen(t *testing.T) {
 	}
 
 	br := b.start(t)
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.screen.press(key('/'))
 	b.screen.typed("something")
 	b.screen.press(named(term.KeyEnter))
@@ -885,7 +885,7 @@ func TestFollowByHandleFromTheCommandLine(t *testing.T) {
 	b := newBrowser(t)
 
 	br := b.start(t)
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.screen.press(key(':'))
 	b.screen.typed("follow @aye")
 	b.screen.press(named(term.KeyEnter))
@@ -920,13 +920,13 @@ func TestTabCompletesTheCommandLine(t *testing.T) {
 	b := newBrowser(t)
 
 	br := b.start(t)
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.screen.press(key(':'), key('f'), named(term.KeyTab))
-	b.eventually(t, ":follow _")
+	b.eventually(t, ":follow █")
 
 	// Escape abandons the line rather than leaving it to reappear next time.
 	b.screen.press(named(term.KeyEscape))
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.quit(t)
 
 	if br.line != "" {
@@ -938,7 +938,7 @@ func TestAnUnknownCommandIsReportedOnScreen(t *testing.T) {
 	b := newBrowser(t)
 
 	b.start(t)
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.screen.press(key(':'))
 	b.screen.typed("serach cats")
 	b.screen.press(named(term.KeyEnter))
@@ -951,7 +951,7 @@ func TestQuitFromTheCommandLine(t *testing.T) {
 	b := newBrowser(t)
 
 	b.start(t)
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.screen.press(key(':'))
 	b.screen.typed("quit")
 	b.screen.press(named(term.KeyEnter))
@@ -968,7 +968,7 @@ func TestSearchFromTheCommandLine(t *testing.T) {
 	b := newBrowser(t)
 
 	b.start(t)
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.screen.press(key(':'))
 	b.screen.typed("search cats")
 	b.screen.press(named(term.KeyEnter))
@@ -986,7 +986,7 @@ func TestFollowingSomethingThatIsNotHere(t *testing.T) {
 	b := newBrowser(t)
 
 	b.start(t)
-	b.eventually(t, "Nothing to show")
+	b.eventually(t, "nothing followed yet")
 	b.screen.press(key(':'))
 	b.screen.typed("follow Nobody At All")
 	b.screen.press(named(term.KeyEnter))
