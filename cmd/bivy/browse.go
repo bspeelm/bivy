@@ -66,6 +66,7 @@ type screen interface {
 type searcher interface {
 	Search(ctx context.Context, query string, limit int) ([]media.Video, error)
 	Channels(ctx context.Context, query string, limit int) ([]media.Channel, error)
+	Uploads(ctx context.Context, channelID string, limit int) (media.Channel, error)
 }
 
 // browser is one interactive session: a list, a cursor, and at most one mpv.
@@ -73,10 +74,13 @@ type browser struct {
 	app    *app
 	screen screen
 
-	state    follow.State
-	fetched  []media.Channel
-	rows     []follow.Row
-	failed   []string
+	state   follow.State
+	fetched []media.Channel
+	rows    []follow.Row
+	failed  []string
+	// stale means some channels came from the extractor because their feed
+	// would not answer, so those rows carry no publish times.
+	stale    bool
 	selected int
 	status   string
 
@@ -445,9 +449,9 @@ func (b *browser) refresh(ctx context.Context) {
 // reload rebuilds the dashboard from what is already fetched, plus whatever a
 // newly followed channel brings, without asking for every feed again.
 func (b *browser) reload(ctx context.Context) {
-	fetched, failed := b.app.fetchAll(ctx, b.state)
+	fetched, failed, stale := b.app.fetchAll(ctx, b.state)
 	if len(fetched) > 0 {
-		b.fetched, b.failed = fetched, failed
+		b.fetched, b.failed, b.stale = fetched, failed, stale
 	}
 	b.query, b.channels, b.dashboard = "", false, nil
 	b.rows = follow.Dashboard(b.state, b.fetched, dashboardRows)
@@ -595,7 +599,7 @@ func (b *browser) load(ctx context.Context) error {
 		return err
 	}
 
-	fetched, failed := b.app.fetchAll(ctx, state)
+	fetched, failed, stale := b.app.fetchAll(ctx, state)
 	if len(fetched) > 0 {
 		state = follow.Visited(follow.Retitle(state, fetched), fetched, b.app.now())
 		if err := b.app.store.WriteJSON(stateFile, state); err != nil {
@@ -603,7 +607,7 @@ func (b *browser) load(ctx context.Context) error {
 		}
 	}
 
-	b.state, b.fetched, b.failed = state, fetched, failed
+	b.state, b.fetched, b.failed, b.stale = state, fetched, failed, stale
 	b.dashboard = nil
 	b.query, b.channels = "", false
 	b.rows = follow.Dashboard(state, fetched, dashboardRows)
@@ -688,6 +692,7 @@ func (b *browser) draw() error {
 		Rows:        b.rows,
 		Failed:      b.failedNow(),
 		Reached:     len(b.fetched),
+		Stale:       b.stale && b.query == "",
 		Now:         b.app.now(),
 		Width:       width,
 		Height:      height,

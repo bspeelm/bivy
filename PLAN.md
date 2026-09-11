@@ -175,7 +175,7 @@ quietly is how this stops being testable, so each names what disagrees with it.
 | `internal/term` | raw mode, the alternate screen, key decoding, redraw. The interactive half of the tui split (ADR-009) |
 | `internal/config` | TOML configuration |
 | `internal/feed` | fetch and parse per-channel XML feeds. **Sole `net/http` importer.** |
-| `internal/ytdlp` | subprocess only: resolve a search query, for videos or channels |
+| `internal/ytdlp` | subprocess only: resolve a search query, and list a channel whose feed is refusing (ADR-013) |
 | `internal/mpv` | launch and drive mpv over an IPC socket |
 | `internal/follow` | follows and watch state, pure |
 | `internal/store` | atomic `0600` persistence |
@@ -294,8 +294,9 @@ bivy makes exactly three kinds of outbound request:
    — the only time bivy reads a page meant for a browser, and never at launch.
    ADR-008.
 3. **Extractor calls**, from `internal/ytdlp` for search and from mpv itself
-   for playback (ADR-010). Either way they are subprocess executions rather
-   than requests bivy makes itself, and neither runs at launch.
+   for playback (ADR-010). Subprocess executions rather than requests bivy
+   makes itself. One of them runs at launch, and only then: a channel whose
+   feed would not answer is listed by the extractor instead (ADR-013).
 
 Nothing else. No analytics, no update check, no crash reporting, no ping. The
 budget in §0 is what makes this checkable rather than merely stated: one

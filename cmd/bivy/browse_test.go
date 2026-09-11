@@ -193,6 +193,7 @@ type stubSearch struct {
 	mu       sync.Mutex
 	results  []media.Video
 	channels []media.Channel
+	uploads  map[string]media.Channel
 	err      error
 	asked    []string
 }
@@ -215,6 +216,16 @@ func (s *stubSearch) Channels(_ context.Context, query string, _ int) ([]media.C
 		return nil, s.err
 	}
 	return s.channels, nil
+}
+
+func (s *stubSearch) Uploads(_ context.Context, channelID string, _ int) (media.Channel, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.asked = append(s.asked, "uploads:"+channelID)
+	if s.uploads == nil {
+		return media.Channel{}, errors.New("no listing for that channel")
+	}
+	return s.uploads[channelID], nil
 }
 
 func (s *stubSearch) queries() []string {
@@ -1372,5 +1383,84 @@ func TestThePictureIsRedrawnWhenTheWindowChanges(t *testing.T) {
 	// Re-drawn, not re-fetched: the bytes did not change, only their size.
 	if got := len(b.art.asked()); got != 1 {
 		t.Errorf("%d fetches for one video at two sizes, want 1", got)
+	}
+}
+
+// The dashboard is the whole program, and a feed service that will not answer
+// leaves it empty. The extractor can list a channel's recent uploads, at the
+// cost of the publish times (ADR-013).
+func TestAFeedThatWillNotAnswerFallsBackToTheExtractor(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.feeds.fail(errors.New("404 Not Found"))
+	b.finder.uploads = map[string]media.Channel{
+		chanA: {ID: chanA, Videos: []media.Video{
+			{ID: "uuuuuuuuuuu", Title: "Listed by the extractor", Duration: 90 * time.Second},
+		}},
+	}
+
+	b.start(t)
+	b.eventually(t, "Listed by the extractor")
+	b.eventually(t, "some feeds are not answering")
+	b.quit(t)
+
+	if asked := b.finder.queries(); len(asked) == 0 || !strings.HasPrefix(asked[0], "uploads:") {
+		t.Errorf("the extractor was asked %v, want a channel listing", asked)
+	}
+}
+
+// The feed is still how bivy learns what a channel posted. The extractor is
+// not asked when the feed answers.
+func TestTheExtractorIsNotAskedWhenTheFeedAnswers(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.quit(t)
+
+	if asked := b.finder.queries(); len(asked) != 0 {
+		t.Errorf("the extractor was asked %v while the feed was answering", asked)
+	}
+	if strings.Contains(b.screen.last(), "not answering") {
+		t.Error("a working dashboard claimed the feeds were down")
+	}
+}
+
+// A channel whose feed fails and whose listing also fails is reported, rather
+// than quietly missing.
+func TestAChannelThatFailsBothWaysIsReported(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.feeds.fail(errors.New("404 Not Found"))
+	b.finder.uploads = nil
+
+	b.start(t)
+	b.eventually(t, "could not be reached")
+	b.quit(t)
+}
+
+// Rows from the extractor carry no publish time, so nothing is marked new on
+// the strength of a date bivy does not have.
+func TestFallbackRowsAreNotMarkedNew(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.feeds.fail(errors.New("404 Not Found"))
+	b.finder.uploads = map[string]media.Channel{
+		chanA: {ID: chanA, Videos: []media.Video{
+			{ID: "uuuuuuuuuuu", Title: "Listed by the extractor", Duration: 90 * time.Second},
+		}},
+	}
+
+	b.start(t)
+	b.eventually(t, "Listed by the extractor")
+	b.quit(t)
+
+	if strings.Contains(b.screen.last(), "•") {
+		t.Errorf("a row with no date was marked new:\n%s", b.screen.last())
+
 	}
 }

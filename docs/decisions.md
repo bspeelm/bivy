@@ -424,3 +424,58 @@ protocol rather than approximated in text.
 **What would reopen this:** a second screen, entered deliberately and left
 deliberately, that is a grid and nothing else — not a mode the list grows into.
 That is a design worth having, and it is not this milestone.
+
+---
+
+## ADR-013 — When a feed will not answer, the extractor lists the channel instead
+
+**Status:** accepted. This amends ADR-003 and the accounting in §9.
+
+ADR-003 says channel updates come from per-channel feeds and not from the
+extractor, and one of the things it bought was that nothing runs an extractor
+at launch. That still describes the normal path. This records what happens
+when the feed service refuses.
+
+### What prompted it
+
+The feed endpoint answered 404 or 500 to every request from one address for
+hours, for every followed channel and every spelling of the query, while
+`youtube.com` and the thumbnail host both answered 200 and the responses came
+back stamped by the feed service itself. It had been answering six requests in
+ten earlier the same day, so retrying was not the answer: there was nothing to
+retry into.
+
+A dashboard is the whole program. Four followed channels and an empty screen is
+not a degraded bivy, it is a bivy that does nothing.
+
+### The argument against
+
+It puts an extractor at launch, which is exactly what ADR-003 scoped out. It is
+slower, it is a subprocess per failed channel, and it is higher-profile than a
+static feed — the extractor drives the service's own pages, which is the
+traffic ADR-003 preferred not to generate.
+
+### What survives it
+
+Only the failure case. The feed is asked first, always; the extractor is asked
+for a channel whose feed did not answer, and never otherwise. A test holds that
+in both directions.
+
+The privacy accounting is unchanged: the extractor is a subprocess, not a
+request bivy makes, so the one-package answer to what bivy says on the wire in
+§0 and §9 stands exactly as it did.
+
+### What it costs, said on screen
+
+A channel listing carries no publish times. The extractor will not give them
+without a request per video, and thirty of those is not a launch. So rows that
+arrived this way have no date, nothing is marked new on the strength of a date
+bivy does not have, and the status line says so:
+
+    some feeds are not answering — those rows came from the extractor, without dates
+
+A dashboard silently missing the thing it sorts by is a dashboard nobody can
+trust. Saying it is the price of the fallback being worth having.
+
+**What would reopen this:** the feed service proving reliable enough that this
+never fires, in which case it is dead code and should go.
