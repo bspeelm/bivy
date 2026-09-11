@@ -1,0 +1,9 @@
+# Every platform bivy claims. Compiled on every check, shipped on every
+# release, read by both — so a platform cannot be shipped without being built
+# or built without being shipped.
+#
+# GOOS/GOARCH, one per line.
+linux/amd64
+linux/arm64
+darwin/amd64
+darwin/arm64

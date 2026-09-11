@@ -18,7 +18,7 @@ LDFLAGS := -s -w -X main.Version=$(VERSION)
 # checkout sits is a property of a machine and not of this project.
 STANDARD_CHECK ?= ../agent-context/check.sh
 
-.PHONY: help lint vet test race budgets standard check build install-binary integration crossbuild clean
+.PHONY: help lint vet test race budgets standard check build install-binary integration crossbuild dist dist-reproducible clean
 
 help:
 	@echo "make check       lint, vet, race tests, budgets, standard - the gate"
@@ -30,6 +30,8 @@ help:
 	@echo "make install-binary  build it, put it on PATH, and say what is missing"
 	@echo "make build       build bivy for this machine"
 	@echo "make crossbuild  compile for every platform the project claims"
+	@echo "make dist        the release archives and their checksums"
+	@echo "make dist-reproducible  build twice and prove the bytes match"
 
 lint:
 	gofmt -l . | (! grep .) || { echo "gofmt -w the files above"; exit 1; }
@@ -75,9 +77,10 @@ build:
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/bivy
 
 # A build that only ever happens on the maintainer's machine is a claim about
-# one machine. The README says Linux and macOS; this is what holds it to that.
+# one machine. The platforms come from scripts/platforms, which the release
+# reads too: shipping one that nothing compiles is the drift this prevents.
 crossbuild:
-	@for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
+	@grep -v '^#' scripts/platforms | grep . | while read -r t; do \
 	    echo "  $$t"; \
 	    GOOS=$${t%/*} GOARCH=$${t#*/} CGO_ENABLED=0 \
 	        go build -trimpath -o /dev/null ./... || exit 1; \
@@ -108,5 +111,23 @@ install-binary: build
 	    echo "       dnf install yt-dlp · apt install yt-dlp · brew install yt-dlp"; }
 	@echo; echo "next: $(BINARY)"
 
+# The release artefacts for every platform, and the checksums over them.
+dist:
+	@sh scripts/dist.sh
+
+# Two builds of one commit, compared. A checksum file is only worth publishing
+# if it is a property of the commit rather than of the run that uploaded it,
+# and this is the command that decides which it is.
+dist-reproducible:
+	@first=$$(mktemp); \
+	 sh scripts/dist.sh >/dev/null; cp dist/SHA256SUMS $$first; \
+	 sh scripts/dist.sh >/dev/null; \
+	 if diff -q $$first dist/SHA256SUMS >/dev/null 2>&1; then \
+	     rm -f $$first; echo "byte-identical across two builds:"; sed 's/^/  /' dist/SHA256SUMS; \
+	 else \
+	     echo "the same commit produced different bytes:"; diff -u $$first dist/SHA256SUMS || true; \
+	     rm -f $$first; exit 1; \
+	 fi
+
 clean:
-	rm -f $(BINARY)
+	rm -rf $(BINARY) dist

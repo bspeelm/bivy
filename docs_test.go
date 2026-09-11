@@ -204,24 +204,100 @@ func TestTheCIClaimIsBackedByAWorkflow(t *testing.T) {
 	}
 }
 
-// The README names the platforms, and something has to compile for them.
-func TestEveryClaimedPlatformIsBuilt(t *testing.T) {
-	targets := makefileTargets(t)
-	if _, found := targets["crossbuild"]; !found {
+// The README names the platforms, something has to compile for them, and a
+// release has to ship them. One list answers all three questions, and this is
+// what holds it there: a platform compiled but never shipped, or shipped but
+// never compiled, is drift that a second copy of the list would hide.
+func TestEveryClaimedPlatformIsBuiltAndShipped(t *testing.T) {
+	const list = "scripts/platforms"
+	platforms := read(t, filepath.FromSlash(list))
+
+	if _, found := makefileTargets(t)["crossbuild"]; !found {
 		t.Fatal("no crossbuild target; nothing compiles for the platforms the README claims")
 	}
+	for _, reader := range []string{"Makefile", "scripts/dist.sh"} {
+		if !strings.Contains(read(t, filepath.FromSlash(reader)), list) {
+			t.Errorf("%s does not read %s, so it is carrying a second list of platforms", reader, list)
+		}
+	}
 
-	recipe := read(t, "Makefile")
-	for _, platform := range []struct{ said, built string }{
-		{"Linux", "linux/amd64"},
-		{"macOS", "darwin/arm64"},
+	documents := read(t, "README.md") + read(t, "PLAN.md")
+	for _, platform := range []struct{ said, goos string }{
+		{"Linux", "linux/"},
+		{"macOS", "darwin/"},
 	} {
-		if !strings.Contains(read(t, "README.md")+read(t, "PLAN.md"), platform.said) {
+		if !strings.Contains(documents, platform.said) {
 			continue
 		}
-		if !strings.Contains(recipe, platform.built) {
-			t.Errorf("the documents claim %s and the Makefile never builds %s", platform.said, platform.built)
+		if !strings.Contains(platforms, platform.goos) {
+			t.Errorf("the documents claim %s and %s has no %s entry", platform.said, list, platform.goos)
 		}
+	}
+}
+
+// §11 describes a release as a tag that publishes archives. A description of a
+// pipeline is not a pipeline, and this is the difference.
+func TestTheReleaseClaimIsBackedByAWorkflow(t *testing.T) {
+	plan := read(t, "PLAN.md")
+	if !strings.Contains(plan, "A release is a tag") {
+		t.Skip("PLAN.md no longer claims a tag publishes a release")
+	}
+
+	dir := filepath.Join(".github", "workflows")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var publishes string
+	for _, e := range entries {
+		body := read(t, filepath.Join(dir, e.Name()))
+		if strings.Contains(body, "tags:") && strings.Contains(body, "gh release create") {
+			publishes = body
+		}
+	}
+	if publishes == "" {
+		t.Fatalf("§11 says a tag publishes a release, and no workflow in %s creates one on a tag", dir)
+	}
+
+	// The checks §11 promises happen before anything is uploaded. Each is a
+	// sentence in the plan that is worth exactly what runs it.
+	for _, required := range []struct{ command, claim string }{
+		{"make check", "the gate runs before a release"},
+		{"make dist-reproducible", "the same commit is built twice and the checksums compared"},
+		{"docs/review/", "a release ships with a review packet"},
+	} {
+		if !strings.Contains(publishes, required.command) {
+			t.Errorf("the release workflow never runs %q, and §11 says %s", required.command, required.claim)
+		}
+	}
+}
+
+// docs/review/ says in prose whether a release has happened yet. That sentence
+// is read by someone deciding whether to trust the directory, and it is the
+// kind of sentence that stays true for exactly one release.
+func TestTheReviewDirectoryClaimMatchesItsContents(t *testing.T) {
+	dir := filepath.Join("docs", "review")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var packets []string
+	for _, e := range entries {
+		if e.Name() != "README.md" && strings.HasSuffix(e.Name(), ".md") {
+			packets = append(packets, e.Name())
+		}
+	}
+
+	const claim = "There is no release yet"
+	saysNone := strings.Contains(read(t, filepath.Join(dir, "README.md")), claim)
+
+	switch {
+	case saysNone && len(packets) > 0:
+		t.Errorf("%s/README.md still says %q, and %s is sitting next to it", dir, claim, packets[0])
+	case !saysNone && len(packets) == 0:
+		t.Errorf("%s/README.md no longer says %q, and there are no packets in it", dir, claim)
 	}
 }
 

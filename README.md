@@ -14,8 +14,9 @@ take.
 
 ## Status
 
-Following, the dashboard, playback and search work. Thumbnails are still to
-come; `PLAN.md` §12 lists the rest.
+0.1.0. Following, the dashboard, playback, search and thumbnails all work.
+Every release carries a review packet in `docs/review/` saying what was checked
+before it went out and what was not.
 
 ## Using it
 
@@ -122,6 +123,30 @@ into the terminal, and never write a cache. Each of those is a numbered
 decision in `docs/decisions.md` with the reasoning attached, so you can
 disagree with the argument rather than guess at the motive.
 
+## Installing
+
+Download the archive for your platform from the releases page, check it, and
+put the binary somewhere on your `PATH`:
+
+```
+sha256sum -c SHA256SUMS --ignore-missing
+tar xzf bivy_<version>_<os>_<arch>.tar.gz
+install -Dm755 bivy_<version>_<os>_<arch>/bivy ~/.local/bin/bivy
+```
+
+Those checksums catch a damaged download. They are not signatures and they do
+not tell you who built the archive: anyone who could replace an archive could
+replace the checksum file sitting beside it. What stands in for a signature is
+that the build is reproducible — the archives are built twice from the tagged
+commit and compared before publishing, so `make dist` on a checkout of the same
+tag produces the same bytes for you to compare against yourself (ADR-014).
+
+Or build it, which needs Go and nothing else:
+
+```
+go install github.com/bspeelm/bivy/cmd/bivy@latest
+```
+
 ## Requirements
 
 - **mpv**, 0.29 or newer, for playback. bivy decodes nothing itself, and it
@@ -129,11 +154,18 @@ disagree with the argument rather than guess at the motive.
   was found.
 - **yt-dlp**, for search, and used by mpv to resolve a video for playback.
   Never needed for the dashboard.
-
-Neither is needed to follow channels or read the dashboard. bivy says which one
-is missing when it needs one.
 - A terminal that speaks the kitty graphics protocol, for thumbnails. Optional;
   without one, bivy renders text.
+
+Neither mpv nor yt-dlp is needed to follow channels or read the dashboard, and
+bivy says which one is missing when it needs one.
+
+mpv also has to be able to reach your display server. Running bivy inside a
+container usually means using the host's mpv rather than one installed next to
+bivy: a container's own mpv cannot share buffers with the host compositor, and
+fails on the display connection after loading the video. A wrapper early on
+`PATH` that forwards to the host's mpv is enough — bivy only needs to find
+something called mpv that can open a window.
 
 ## What it leaves behind
 
@@ -149,6 +181,7 @@ make install-binary  build it and put it on ~/.local/bin
 make build     build bivy for this machine
 make check     lint, vet, race tests, budgets, and the standard conformance check
 make crossbuild  compile for every platform the project claims
+make dist      the release archives and their checksums
 make test      go test
 make budgets   the PLAN.md §0 budgets, asserted
 make help      every target, with a line each

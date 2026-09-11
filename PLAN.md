@@ -340,10 +340,21 @@ The conformance check skips in CI rather than failing: the development
 standard lives outside this repository and is not checked out beside it. That
 is the one part of the gate a green CI run does not prove.
 
-Releases ship with a review packet in `docs/review/`, stating what was checked
-and what was not. There is no version yet and no release process yet; this
-section is a placeholder that will be filled by the milestone that needs it,
-and saying so is better than describing a pipeline that does not exist.
+A release is a tag (ADR-014). Pushing `v<major>.<minor>.<patch>` runs that same
+gate on both platforms, then builds one archive per platform in
+`scripts/platforms` and publishes them with a `SHA256SUMS` file. `make dist` is
+that build, and `make dist-reproducible` is what runs before publishing: the
+same commit is built twice and the checksums compared, because a checksum over
+a single build says only which copy was uploaded.
+
+Releases ship with a review packet in `docs/review/`, named for the version,
+stating what was checked and what was not. The workflow refuses to publish
+without one, and the packet is the release notes — one document rather than two
+that describe the same release and disagree by the second one.
+
+The archives are not signed, and the documentation says so in those words: a
+checksum published beside its own artefact detects a corrupted download and
+nothing else. Reproducibility is what carries that weight instead (ADR-014).
 
 ---
 
