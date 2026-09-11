@@ -98,14 +98,29 @@ else is a key. That rule is ADR-011 and it is what keeps the list short.
 
 ## Thumbnails
 
-Where your terminal speaks the kitty graphics protocol, the row under the
-cursor gets its thumbnail above the list. bivy asks the terminal whether it can
-draw rather than guessing from `$TERM`, so moving between terminals is not
-something you have to configure — and where the answer is no, nothing changes
-and no stray bytes are printed.
+Where your terminal speaks the kitty graphics protocol, every row on screen
+gets its thumbnail to the left of its title:
 
-Pictures are fetched only for the row you are looking at, kept in memory for
-the session, and written nowhere. There is no thumbnail cache, because a
+```
+bivy · 2 new videos since your last visit
+──────────────────────────────────────────────────────────────────
+┌─────────┐  • The Scariest Chart In Engineering
+│  image  │  Veritasium · 7h ago
+└─────────┘
+┌─────────┐> • But what is a neural network?
+│  image  │  3Blue1Brown · 4d ago
+└─────────┘
+```
+
+An entry with a picture is three rows tall instead of one, so fewer fit —
+that is the whole of what pictures cost.
+
+bivy asks the terminal whether it can draw rather than guessing from `$TERM`,
+so moving between terminals is not something you configure. Where the answer
+is no, entries are one row again and no stray bytes are printed.
+
+Pictures are fetched for what is on screen and nothing more, kept in memory
+for the session, and written nowhere. There is no thumbnail cache, because a
 thumbnail cache is a viewing history in image form in a directory you did not
 create.
 

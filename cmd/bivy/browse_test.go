@@ -1224,27 +1224,57 @@ func TestFollowingAHandleStillAsksTheFeed(t *testing.T) {
 	}
 }
 
-// A picture is fetched for the row somebody is looking at, and for no other.
-// A list of thirty rows is thirty pictures nobody asked for.
-func TestOnlyTheRowUnderTheCursorGetsAPicture(t *testing.T) {
+// A picture is fetched for what is on screen, and for no more than that. A
+// search returns thirty rows and a screen holds a handful; the rest would be
+// requests nobody asked for.
+func TestPicturesAreFetchedForWhatIsOnScreen(t *testing.T) {
 	b := newBrowser(t)
 	b.screen.draws = graphics.Kitty
 	b.app.art = b.art
 	b.run(t, "follow", chanA)
 
 	b.start(t)
-	b.eventually(t, "<art 28x7 picture of aaaaaaaaaaa>")
-
-	if got := b.art.asked(); len(got) != 1 || got[0] != "aaaaaaaaaaa" {
-		t.Errorf("fetched %v, want only the row under the cursor", got)
-	}
-
-	b.screen.press(named(term.KeyDown))
+	b.eventually(t, "picture of aaaaaaaaaaa")
 	b.eventually(t, "picture of ccccccccccc")
 	b.quit(t)
 
-	if got := len(b.art.asked()); got != 2 {
-		t.Errorf("%d pictures fetched after moving one row, want 2", got)
+	// Both rows are on screen, and both have one. Neither was asked for twice.
+	asked := b.art.asked()
+	if len(asked) != 2 {
+		t.Errorf("fetched %v, want one picture per visible row", asked)
+	}
+}
+
+// Thirty rows on a screen that holds a few is not thirty requests.
+func TestOffScreenRowsGetNoPicture(t *testing.T) {
+	b := newBrowser(t)
+	b.screen.draws = graphics.Kitty
+	b.app.art = b.art
+
+	var many []media.Video
+	for i := range 30 {
+		many = append(many, media.Video{
+			ID:     fmt.Sprintf("vid%08d", i),
+			Title:  fmt.Sprintf("Result %d", i),
+			Author: "Someone",
+		})
+	}
+	b.finder.results = many
+
+	b.start(t)
+	b.eventually(t, "nothing followed yet")
+	b.screen.press(key('/'))
+	b.screen.typed("lots")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "30 results")
+	b.eventually(t, "picture of vid00000000")
+	b.quit(t)
+
+	if got := len(b.art.asked()); got >= 30 {
+		t.Errorf("fetched %d pictures for 30 rows on a screen that holds fewer", got)
+	}
+	if got := len(b.art.asked()); got == 0 {
+		t.Error("fetched no pictures at all")
 	}
 }
 
@@ -1258,14 +1288,15 @@ func TestAPictureIsFetchedOnce(t *testing.T) {
 
 	b.start(t)
 	b.eventually(t, "picture of aaaaaaaaaaa")
-	b.screen.press(named(term.KeyDown))
-	b.eventually(t, "picture of ccccccccccc")
-	b.screen.press(named(term.KeyUp))
+	for range 4 {
+		b.screen.press(named(term.KeyDown))
+		b.screen.press(named(term.KeyUp))
+	}
 	b.eventually(t, "picture of aaaaaaaaaaa")
 	b.quit(t)
 
 	if got := len(b.art.asked()); got != 2 {
-		t.Errorf("%d fetches for two rows visited twice, want 2", got)
+		t.Errorf("%d fetches for two rows drawn many times, want 2", got)
 	}
 }
 

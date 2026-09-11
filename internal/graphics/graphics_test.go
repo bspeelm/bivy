@@ -105,7 +105,7 @@ func TestRenderDrawsAnImage(t *testing.T) {
 	if !strings.HasSuffix(out, "\x1b\\") {
 		t.Errorf("the output does not end a sequence properly: %.40q", out[len(out)-40:])
 	}
-	for _, want := range []string{"a=T", "f=100", "c=20", "r=6", "q=2"} {
+	for _, want := range []string{"a=T", "f=100", "c=20", "r=6", "q=2", "C=1"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the sequence does not carry %s", want)
 		}
@@ -278,5 +278,17 @@ func TestRenderReEncodesRatherThanForwarding(t *testing.T) {
 		if !bytes.HasPrefix(raw, []byte("\x89PNG")) {
 			t.Errorf("what went out is not a PNG: %.8q", raw)
 		}
+	}
+}
+
+// The picture goes beside the text, not instead of it, so it must not move the
+// cursor: the caller writes the rows afterwards and indents them past it.
+func TestRenderLeavesTheCursorAlone(t *testing.T) {
+	out, err := Render(thumbnail(t, 64, 64), 6, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "C=1") {
+		t.Error("the picture moves the cursor, so text after it lands below rather than beside")
 	}
 }

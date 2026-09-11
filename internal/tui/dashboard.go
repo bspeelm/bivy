@@ -62,11 +62,11 @@ type Dashboard struct {
 	// has the keyboard.
 	Line   string
 	Typing bool
-	// Art is the picture for the row under the cursor, already turned into
-	// what the terminal draws, and the rows it occupies. Built elsewhere: an
-	// escape sequence carrying a picture is text like any other.
-	Art     string
-	ArtRows int
+	// Art is the picture for each row, by row index, already turned into what
+	// the terminal draws. Built elsewhere: an escape sequence carrying a
+	// picture is text like any other. Absent where there is no picture, which
+	// is every row on a terminal that cannot draw one.
+	Art map[int]string
 	// Interactive draws the cursor, the frame and the key hints. Without it
 	// the same model renders as a plain listing, which is what a pipe gets.
 	Interactive bool
@@ -109,6 +109,9 @@ func styled(attr, text string) string {
 	return attr + text + reset
 }
 
+// forward moves the cursor right without writing anything over what is there.
+func forward(cells int) string { return fmt.Sprintf("\x1b[%dC", cells) }
+
 // rule is the horizontal line above and below the list.
 func rule(width int) string { return strings.Repeat("─", width) }
 
@@ -146,13 +149,6 @@ func Render(d Dashboard) string {
 		visible = max(1, height-chrome(d, width))
 	}
 
-	if rows := d.artRows(visible); rows > 0 {
-		b.WriteString(d.Art)
-		// The picture is drawn where the cursor sits and does not move it, so
-		// the rows it covers are stepped over by hand.
-		b.WriteString(strings.Repeat("\n", rows))
-		visible -= rows
-	}
 	b.WriteString(list(d, width, visible))
 
 	b.WriteString(styled(faint, rule(width)))
@@ -179,21 +175,35 @@ func chrome(d Dashboard, width int) int {
 	return n
 }
 
-// minRowsBesideArt is how much list has to remain for a picture to be worth
-// its rows. One row and a thumbnail is a thumbnail of something nobody can
-// scroll away from.
-const minRowsBesideArt = 4
+// An entry with a picture is this tall, and the picture is this wide. A
+// thumbnail is 16:9 and a cell is about twice as tall as it is wide, so three
+// rows want roughly eleven columns to keep its shape.
+const (
+	ArtRows = 3
+	ArtCols = 11
+)
 
-// artRows is how many rows the picture gets, which is none when there is not
-// enough screen to spare them.
-func (d Dashboard) artRows(visible int) int {
-	if d.Art == "" || d.ArtRows <= 0 {
-		return 0
+// Window is which rows this model would draw, so a caller can fetch what is
+// about to be shown and nothing else.
+func (d Dashboard) Window() (first, last int) {
+	width, height := d.Width, d.Height
+	if width < minWidth {
+		width = defaultWidth
 	}
-	if visible-d.ArtRows < minRowsBesideArt {
-		return 0
+	if height <= 0 {
+		height = defaultHeight
 	}
-	return d.ArtRows
+	visible := max(1, height-chrome(d, width))
+	return window(d.Selected, len(d.Rows), visible/d.entryRows())
+}
+
+// entryRows is how many screen rows one entry takes. Pictures make an entry
+// taller, which is the whole of what they cost.
+func (d Dashboard) entryRows() int {
+	if len(d.Art) == 0 {
+		return 1
+	}
+	return ArtRows
 }
 
 // heading is what this screen is, after the program's name.
@@ -227,43 +237,66 @@ func list(d Dashboard, width, visible int) string {
 		return empty(d, width, visible)
 	}
 
-	first, last := window(d.Selected, len(d.Rows), visible)
+	tall := d.entryRows()
+	first, last := window(d.Selected, len(d.Rows), visible/tall)
 
 	var b strings.Builder
 	for i := first; i < last; i++ {
-		cursor := " "
-		if d.Interactive && i == d.Selected {
-			cursor = ">"
-		}
-		line := fit(cursor+" "+row(d, d.Rows[i], width-2), width)
-		if d.Interactive && i == d.Selected {
-			line = styled(reverse, line)
-		}
-		b.WriteString(line)
-		b.WriteString("\n")
+		b.WriteString(entry(d, i, width, tall))
 	}
-	for range max(0, visible-(last-first)) {
+	for range max(0, visible-(last-first)*tall) {
 		b.WriteString("\n")
 	}
 	return b.String()
 }
 
-// row is one line: what is being chosen on the left, what is known about it on
-// the right.
-func row(d Dashboard, r follow.Row, width int) string {
-	if r.IsChannel() {
-		return sides(marker(r)+" "+r.Channel, followers(r.Followers), width)
+// entry is one row of the list, which is several rows of the screen when it
+// has a picture beside it.
+func entry(d Dashboard, i, width, tall int) string {
+	r := d.Rows[i]
+	selected := d.Interactive && i == d.Selected
+
+	cursor := " "
+	if selected {
+		cursor = ">"
 	}
 
-	left := marker(r) + " " + r.Video.Title
-	right := r.Channel
-	if w := when(d.Now, r.Video); w != "" {
-		if right != "" {
-			right += " · "
-		}
-		right += w
+	indent := 0
+	var b strings.Builder
+	if art, drawn := d.Art[i]; drawn && art != "" {
+		// Placed where the cursor already is, without moving it.
+		b.WriteString(art)
+		indent = ArtCols + 1
 	}
-	return sides(left, right, width)
+
+	for line := range tall {
+		text := ""
+		switch {
+		case tall == 1:
+			// One row to say everything: what it is on the left, what is
+			// known about it right-aligned, so the titles line up.
+			text = sides(cursor+" "+marker(r)+" "+primary(r), secondary(d, r), width-indent)
+		case line == 0:
+			text = cursor + " " + marker(r) + " " + primary(r)
+		case line == 1:
+			text = "  " + secondary(d, r)
+		}
+
+		row := fit(text, width-indent)
+		if selected {
+			row = styled(reverse, row)
+		}
+		if indent > 0 {
+			// Stepped over rather than written across. Spaces would be text in
+			// the cells the picture occupies, and whether text over a picture
+			// hides it is the terminal's business rather than something to
+			// depend on.
+			row = forward(indent) + row
+		}
+		b.WriteString(row)
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // followers is a subscriber count at a glance. Exact figures in the millions
@@ -279,6 +312,29 @@ func followers(n int) string {
 	default:
 		return fmt.Sprintf("%d subscribers", n)
 	}
+}
+
+// primary is what the entry is: the thing being chosen between.
+func primary(r follow.Row) string {
+	if r.IsChannel() {
+		return r.Channel
+	}
+	return r.Video.Title
+}
+
+// secondary is what is known about it.
+func secondary(d Dashboard, r follow.Row) string {
+	if r.IsChannel() {
+		return followers(r.Followers)
+	}
+	out := r.Channel
+	if w := when(d.Now, r.Video); w != "" {
+		if out != "" {
+			out += " · "
+		}
+		out += w
+	}
+	return out
 }
 
 // sides puts one string at each end. The left yields: a title cut short is

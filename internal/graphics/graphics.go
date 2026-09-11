@@ -128,7 +128,11 @@ func Render(data []byte, cols, rows int) (string, error) {
 		if first {
 			// q=2 asks the terminal not to answer: a reply arrives on the
 			// same file the keys come from, and is read as keystrokes.
-			fmt.Fprintf(&b, "a=T,f=100,q=2,s=%d,v=%d,c=%d,r=%d,", bounds.Dx(), bounds.Dy(), cols, rows)
+			//
+			// C=1 leaves the cursor where it was. The picture goes beside the
+			// text rather than instead of it, so the caller writes its rows
+			// afterwards and indents them past the picture.
+			fmt.Fprintf(&b, "a=T,f=100,q=2,C=1,s=%d,v=%d,c=%d,r=%d,", bounds.Dx(), bounds.Dy(), cols, rows)
 		}
 		fmt.Fprintf(&b, "m=%d;%s\x1b\\", more, piece)
 	}

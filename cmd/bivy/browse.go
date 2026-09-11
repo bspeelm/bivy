@@ -88,12 +88,10 @@ type browser struct {
 	// be attributed to something. mpv reports that a file ended, not which.
 	playing media.Video
 
-	// art is the picture for the row under the cursor; pictures is what this
-	// session has fetched. In memory and nowhere else — a thumbnail cache on
-	// disk is a viewing history in image form (ADR-007).
-	art      string
-	pictures map[string][]byte
-	drawn    string
+	// drawn is every picture this session has turned into escape sequences,
+	// by video. In memory and nowhere else — a thumbnail cache on disk is a
+	// viewing history in image form (ADR-007).
+	drawn map[string]string
 
 	// query is what was searched for, empty on the dashboard; channels means
 	// those results are channels. line is what has been typed into the
@@ -621,74 +619,67 @@ func (b *browser) failedNow() []string {
 	return b.failed
 }
 
-// The box a thumbnail is drawn into, in cells: wide enough to be a picture
-// rather than a stamp, short enough to leave a list.
-const (
-	artCols = 28
-	artRows = 7
-)
-
-// picture is the drawn thumbnail for the row under the cursor, or nothing.
-// What is worth a request is what somebody is looking at: a list of thirty
-// rows is thirty pictures nobody asked for.
-func (b *browser) picture(ctx context.Context) string {
-	if b.app.art == nil || b.selected >= len(b.rows) {
-		return ""
-	}
-	id := b.rows[b.selected].Video.ID
-	if id == "" {
-		return ""
-	}
-	if id == b.drawn {
-		return b.art
+// pictures for every row on screen, by row index.
+//
+// Fetched for what is visible rather than for the whole list: a search returns
+// thirty rows and a screen holds six, so twenty-four of them would be requests
+// nobody asked for. What has been fetched is kept, so scrolling back costs
+// nothing.
+func (b *browser) art(ctx context.Context, first, last int) map[int]string {
+	if b.app.art == nil {
+		return nil
 	}
 
-	data, held := b.pictures[id]
-	if !held {
-		var err error
-		if data, err = b.app.art.Fetch(ctx, id); err != nil {
-			// Not worth a word on screen: the row says what the video is.
-			b.drawn, b.art = id, ""
-			return ""
+	out := map[int]string{}
+	for i := first; i < last && i < len(b.rows); i++ {
+		id := b.rows[i].Video.ID
+		if id == "" {
+			continue
 		}
-		b.remember(id, data)
-	}
 
-	drawn, err := b.app.art.Draw(data, artCols, artRows)
-	if err != nil {
-		drawn = ""
+		drawn, held := b.drawn[id]
+		if !held {
+			data, err := b.app.art.Fetch(ctx, id)
+			if err != nil {
+				// Not worth a word on screen: the row says what the video is.
+				b.remember(id, "")
+				continue
+			}
+			if drawn, err = b.app.art.Draw(data, tui.ArtCols, tui.ArtRows); err != nil {
+				drawn = ""
+			}
+			b.remember(id, drawn)
+		}
+		if drawn != "" {
+			out[i] = drawn
+		}
 	}
-	b.drawn, b.art = id, drawn
-	return drawn
+	return out
 }
 
-// picturesHeld bounds what a session keeps: "small and short" is not a
-// limit.
-const picturesHeld = 60
+// picturesHeld bounds what a session keeps: "small and short" is not a limit.
+const picturesHeld = 120
 
-// remember keeps a picture for the session, forgetting an arbitrary one once
-// there are too many — arbitrary because each is equally cheap to fetch
+// remember keeps a drawn picture for the session, forgetting an arbitrary one
+// once there are too many — arbitrary because each is equally cheap to draw
 // again.
-func (b *browser) remember(id string, data []byte) {
-	if b.pictures == nil {
+func (b *browser) remember(id, drawn string) {
+	if b.drawn == nil {
 		// So a browser never handed one is short of a cache, not of a map.
-		b.pictures = map[string][]byte{}
+		b.drawn = map[string]string{}
 	}
-	for len(b.pictures) >= picturesHeld {
-		for old := range b.pictures {
-			delete(b.pictures, old)
+	for len(b.drawn) >= picturesHeld {
+		for old := range b.drawn {
+			delete(b.drawn, old)
 			break
 		}
 	}
-	b.pictures[id] = data
+	b.drawn[id] = drawn
 }
 
 func (b *browser) draw() error {
 	width, height := b.screen.Size()
-	art := b.picture(context.Background())
-	return b.screen.Draw(tui.Render(tui.Dashboard{
-		Art:         art,
-		ArtRows:     artRows,
+	model := tui.Dashboard{
 		Rows:        b.rows,
 		Failed:      b.failedNow(),
 		Now:         b.app.now(),
@@ -701,7 +692,17 @@ func (b *browser) draw() error {
 		Line:        b.line,
 		Typing:      b.typing,
 		Interactive: true,
-	}))
+	}
+
+	// Which rows are on screen depends on how tall an entry is, which depends
+	// on whether there are pictures at all — so the model is asked with an
+	// empty set, and the pictures for what it reports are put back into it.
+	if b.app.art != nil {
+		model.Art = map[int]string{}
+		first, last := model.Window()
+		model.Art = b.art(context.Background(), first, last)
+	}
+	return b.screen.Draw(tui.Render(model))
 }
 
 // playbackTrouble explains a video that would not play.
