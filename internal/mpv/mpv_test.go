@@ -127,6 +127,17 @@ func TestStandInProcess(t *testing.T) {
 			// A line that is not JSON at all, which must not end the
 			// conversation.
 			_, _ = conn.Write([]byte("this is not json\n"))
+		case name == "request_log_messages":
+			_ = encoder.Encode(map[string]any{"error": "success", "request_id": req.RequestID})
+			if behaviour == "dies-mid-playback" {
+				// mpv complains down the socket and then goes, which is what
+				// a player losing its display actually does.
+				_ = encoder.Encode(map[string]any{
+					"event": "log-message", "prefix": "vo/gpu/wayland",
+					"level": "fatal", "text": "Error occurred on the display fd\n",
+				})
+				_ = encoder.Encode(map[string]any{"event": "end-file", "reason": "quit"})
+			}
 		case name == "quit":
 			if marker := os.Getenv(quitMarkerEnv); marker != "" {
 				_ = os.WriteFile(marker, []byte("asked"), 0o600)
@@ -195,6 +206,63 @@ func TestPlayingToTheEndIsDistinguishableFromStopping(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A player that dies and a window the user closed arrive as the same event
+// with the same reason. Only what mpv said alongside tells them apart, and
+// --terminal=no means the socket is the only place it can say it.
+func TestAPlayerThatDiesExplainsItself(t *testing.T) {
+	p := start(t, "dies-mid-playback")
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case e, open := <-p.Events():
+			if !open {
+				t.Fatal("the player went away without an end-file")
+			}
+			if e.Name != "end-file" {
+				continue
+			}
+			if e.Finished() {
+				t.Fatal("a death was reported as reaching the end")
+			}
+			if e.Detail == "" {
+				t.Fatal("playback stopped with nothing to show for it")
+			}
+			if !strings.Contains(e.Detail, "display fd") {
+				t.Errorf("detail = %q, want what mpv actually said", e.Detail)
+			}
+			return
+		case <-deadline:
+			t.Fatal("no end-file arrived")
+		}
+	}
+}
+
+// A window the user closed says nothing, because there is nothing wrong.
+func TestAStoppedPlaybackWithNoComplaintStaysQuiet(t *testing.T) {
+	p := start(t, "stopped-early")
+
+	if err := p.Play(aVideo()); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case e := <-p.Events():
+			if e.Name != "end-file" {
+				continue
+			}
+			if e.Detail != "" {
+				t.Errorf("an ordinary stop carried %q", e.Detail)
+			}
+			return
+		case <-deadline:
+			t.Fatal("no end-file arrived")
+		}
 	}
 }
 

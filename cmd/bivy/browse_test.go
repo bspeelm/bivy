@@ -311,6 +311,28 @@ func TestAVideoIsMarkedWatchedWhenItReachesItsEnd(t *testing.T) {
 	}
 }
 
+// The complaint the user actually gets: press enter, and nothing happens and
+// nothing is said. mpv dying and a window being closed are the same event, so
+// bivy showed the same nothing for both.
+func TestAPlayerThatDiesSaysSoOnScreen(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "playing ·")
+
+	b.player.events <- mpv.Event{
+		Name:   "end-file",
+		Reason: "quit",
+		Detail: "Error occurred on the display fd",
+	}
+	b.eventually(t, "could not play that")
+	b.eventually(t, "display fd")
+	b.quit(t)
+}
+
 func TestAVideoThatWasStoppedIsNotMarkedWatched(t *testing.T) {
 	b := newBrowser(t)
 	b.run(t, "follow", chanA)

@@ -313,7 +313,11 @@ func (b *browser) report(e mpv.Event) {
 		return
 	}
 
-	if e.Failed() {
+	// A refusal is always worth saying. A playback that merely stopped is
+	// worth saying only when mpv complained: the user closing the window and
+	// the player dying arrive as the same event with the same reason, and the
+	// detail alongside is the only thing that tells them apart.
+	if e.Failed() || (!e.Finished() && e.Detail != "") {
 		b.status = playbackTrouble(e)
 		return
 	}

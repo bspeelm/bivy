@@ -34,6 +34,11 @@ const (
 	startWait             = 10 * time.Second
 	quitWait              = 3 * time.Second
 
+	// How recent an error has to be to explain a playback that stopped. Long
+	// enough to cover a slow teardown, short enough that a complaint from an
+	// earlier video does not get blamed on this one.
+	troubleWindow = 30 * time.Second
+
 	// sun_path is 108 bytes on Linux and 104 on macOS, and the limit belongs
 	// to that struct rather than to the filesystem. A Mac's temporary
 	// directory is already fifty characters before bivy adds anything.
@@ -91,6 +96,12 @@ type Player struct {
 	mu      sync.Mutex
 	nextID  int
 	waiting map[int]chan reply
+	// trouble is the last thing mpv complained about, and when. Kept because
+	// an end-file says only that playback stopped: mpv dying and the user
+	// closing the window are the same event with the same reason, and this is
+	// what tells them apart.
+	trouble   string
+	troubleAt time.Time
 
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -108,6 +119,9 @@ type reply struct {
 	Event     string          `json:"event"`
 	Reason    string          `json:"reason"`
 	FileError string          `json:"file_error"`
+	Level     string          `json:"level"`
+	Prefix    string          `json:"prefix"`
+	Text      string          `json:"text"`
 }
 
 // Start launches mpv and connects to it. The socket lives in a 0700 directory
@@ -172,6 +186,14 @@ func Start(ctx context.Context, opt Options) (*Player, error) {
 		closed:  make(chan struct{}),
 	}
 	go p.read()
+
+	// Ask for mpv's own errors down the socket. --terminal=no keeps them off
+	// the screen bivy is drawing, which would otherwise mean nobody ever sees
+	// them at all.
+	if err := p.send("request_log_messages", "error"); err != nil {
+		_ = p.Close()
+		return nil, err
+	}
 	return p, nil
 }
 
@@ -360,9 +382,13 @@ func (p *Player) read() {
 			continue
 		}
 
+		if r.Event == "log-message" {
+			p.remember(r)
+			continue
+		}
 		if r.Event != "" {
 			select {
-			case p.events <- Event{Name: r.Event, Reason: r.Reason, Detail: r.FileError}:
+			case p.events <- p.describe(r):
 			default:
 			}
 			continue
@@ -375,6 +401,38 @@ func (p *Player) read() {
 			answer <- r
 		}
 	}
+}
+
+// remember keeps mpv's most recent complaint.
+func (p *Player) remember(r reply) {
+	text := strings.TrimSpace(r.Text)
+	if text == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.trouble, p.troubleAt = text, time.Now()
+}
+
+// describe turns a reply into an event, attaching what mpv complained about
+// when playback ended for a reason that is not the end of the video.
+//
+// mpv reports that a file ended, not why it could not continue. A window the
+// user closed and a player that died produce the same reason, and only the
+// error alongside tells them apart.
+func (p *Player) describe(r reply) Event {
+	e := Event{Name: r.Event, Reason: r.Reason, Detail: r.FileError}
+	if e.Name != "end-file" || e.Reason == "eof" || e.Detail != "" {
+		return e
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.trouble != "" && time.Since(p.troubleAt) < troubleWindow {
+		e.Detail = p.trouble
+		p.trouble = ""
+	}
+	return e
 }
 
 // Version asks an mpv binary what it is.
