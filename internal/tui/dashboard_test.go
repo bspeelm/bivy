@@ -113,7 +113,10 @@ func TestRenderDashboard(t *testing.T) {
 			row("Aye", "The one under the cursor", 2*time.Hour, true),
 		}}},
 		{"scrolled", Dashboard{Now: now, Interactive: true, Height: 10, Selected: 12, Rows: manyRows(30)}},
-		{"typing a search", Dashboard{Now: now, Interactive: true, Typing: true, Query: "terminal video", Rows: manyRows(5)}},
+		{"typing a search", Dashboard{Now: now, Interactive: true, Typing: true, Line: "search terminal video", Rows: manyRows(5)}},
+		{"the command line empty", Dashboard{Now: now, Interactive: true, Typing: true, Rows: manyRows(5)}},
+		{"the command line narrowed", Dashboard{Now: now, Interactive: true, Typing: true, Line: "f", Rows: manyRows(5)}},
+		{"the command line matching nothing", Dashboard{Now: now, Interactive: true, Typing: true, Line: "xyzzy"}},
 		{"search results", Dashboard{Now: now, Interactive: true, Query: "terminal video", Rows: []follow.Row{
 			resultRow("DistroTube", "Watch Videos In Your Linux Terminal", 89*time.Second),
 			resultRow("Someone Else", "A much longer one", 2*time.Hour+5*time.Minute+9*time.Second),
@@ -363,8 +366,8 @@ func TestLengthFitsItsColumn(t *testing.T) {
 
 // The search box has to show what has been typed, including nothing.
 func TestTheSearchPromptShowsTheQuery(t *testing.T) {
-	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true, Query: "cats"})
-	if !strings.Contains(frame, "search: cats") {
+	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true, Line: "search cats"})
+	if !strings.Contains(frame, ":search cats") {
 		t.Errorf("the prompt does not show the query:\n%s", frame)
 	}
 	if !strings.Contains(frame, "esc cancel") {
@@ -372,7 +375,7 @@ func TestTheSearchPromptShowsTheQuery(t *testing.T) {
 	}
 
 	empty := Render(Dashboard{Now: now, Interactive: true, Typing: true})
-	if !strings.Contains(empty, "search:") {
+	if !strings.Contains(empty, ":") {
 		t.Errorf("an empty prompt does not show:\n%s", empty)
 	}
 }
@@ -380,7 +383,7 @@ func TestTheSearchPromptShowsTheQuery(t *testing.T) {
 // While typing, the rows underneath are not drawn: the list about to be
 // replaced is not a list anyone is choosing from.
 func TestTypingHidesTheRowsBeneathIt(t *testing.T) {
-	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true, Query: "x", Rows: manyRows(5)})
+	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true, Line: "search x", Rows: manyRows(5)})
 	if strings.Contains(frame, "Video number") {
 		t.Errorf("rows were drawn under the search prompt:\n%s", frame)
 	}
@@ -426,8 +429,38 @@ func TestTheHintsOfferOnlyKeysThatWouldDoSomething(t *testing.T) {
 
 // "showing 1-0 of 5" is arithmetic rather than information.
 func TestNoWindowCountWhenNoRowsAreDrawn(t *testing.T) {
-	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true, Query: "x", Rows: manyRows(5)})
+	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true, Line: "search x", Rows: manyRows(5)})
 	if strings.Contains(frame, "showing") {
 		t.Errorf("a window count was drawn with no window:\n%s", frame)
+	}
+}
+
+// The completion list is the half of the bargain that makes a command line
+// bearable: it shows what exists rather than asking anyone to remember.
+func TestTheCommandLineShowsWhatExists(t *testing.T) {
+	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true})
+	for _, c := range Commands {
+		if !strings.Contains(frame, c.Name) {
+			t.Errorf("the empty command line does not list %q:\n%s", c.Name, frame)
+		}
+		if !strings.Contains(frame, c.Summary) {
+			t.Errorf("the empty command line does not summarise %q", c.Name)
+		}
+	}
+
+	// Narrowing narrows the list.
+	narrowed := Render(Dashboard{Now: now, Interactive: true, Typing: true, Line: "f"})
+	if !strings.Contains(narrowed, "follow") {
+		t.Errorf("narrowing to \"f\" lost follow:\n%s", narrowed)
+	}
+	if strings.Contains(narrowed, "quit") {
+		t.Errorf("narrowing to \"f\" still offers quit:\n%s", narrowed)
+	}
+}
+
+func TestACommandLineWithNoMatchesSaysSo(t *testing.T) {
+	frame := Render(Dashboard{Now: now, Interactive: true, Typing: true, Line: "xyzzy"})
+	if !strings.Contains(frame, "nothing by that name") {
+		t.Errorf("a line matching nothing does not say so:\n%s", frame)
 	}
 }

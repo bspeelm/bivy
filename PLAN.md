@@ -180,7 +180,7 @@ quietly is how this stops being testable, so each names what disagrees with it.
 | `internal/follow` | follows and watch state, pure |
 | `internal/store` | atomic `0600` persistence |
 | `internal/graphics` | terminal capability probe, kitty-protocol image emit |
-| `internal/tui` | dashboard, search, thumbnail grid |
+| `internal/tui` | dashboard, search, the command line, thumbnail grid |
 
 ### The dashboard needs no extractor
 
@@ -307,6 +307,8 @@ count above is the thing to watch — a fourth kind is a decision, not a detail.
 ## §10 Testing
 
 - **Golden files for every screen.** Possible because of architectural rule 1.
+- **A test that every command earns its place** under ADR-011's rule, so the
+  command line does not become the place features go to avoid §3.
 - **Fuzzing on the feed parser**, because it is the one place remote bytes are
   parsed.
 - **A table test on argument construction** for both external processes,

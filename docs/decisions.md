@@ -315,3 +315,54 @@ play something. Both are stated in the README rather than discovered.
 **What would reopen this:** needing to choose a format, needing to know why a
 resolve failed, or milestone 3 making the extractor a package that already
 exists.
+
+---
+
+## ADR-011 — A command line for what takes an argument, and keys for everything else
+
+**Status:** accepted, after milestone 3.
+
+`:` opens a command line. `/` opens the same line with `search ` already in it,
+because searching is the one command common enough to deserve a key of its own
+and that spelling is the one every terminal user already knows.
+
+### The argument against having one at all
+
+A command line is a text-entry surface in a program driven by four keys. It
+costs line editing, parsing, error reporting, and somewhere to list what
+exists — and the real cost is not the code. Once a command line exists, a
+feature request becomes "add a command for it" rather than being refused, and
+§3 is the fence that keeps bivy from becoming the program it was built instead
+of.
+
+What answers it is that bivy already had the problem a command line solves.
+Following a channel was a thing you could only do by quitting, typing
+`bivy follow`, and starting again — while looking at a screen full of that
+channel's videos. The alternative to a command line was a key per verb, and
+`f` for follow, `u` for unfollow, `h` for help is how a program ends up with
+twenty-six meanings for twenty-six letters and no room for the twenty-seventh.
+
+### The rule that keeps it small
+
+**A command exists because it takes an argument, or because it is rare.
+Anything that is neither is a key.**
+
+So `search`, `follow` and `unfollow` are commands: each needs words after it.
+`help` and `quit` are commands because they are rare. Moving, playing,
+refreshing and going back are keys, and adding a command for any of them would
+be the first sign this fence has stopped holding.
+
+The completion list is part of the bargain. A command line that does not show
+what it accepts is a guessing game, so tab completes as far as the matches
+agree and the list under the line names every command with a one-line summary.
+
+### What this does not become
+
+Not a scripting surface, not a configuration language, not a way to reach
+anything §3 refuses. A command that would download something, log in, or open a
+page is refused for the reasons already recorded, and the command line existing
+does not reopen any of them.
+
+**What would reopen this:** nothing. The question was whether to have one; it
+is answered. Whether a particular command should exist is answered by the rule
+above, in the pull request that proposes it.

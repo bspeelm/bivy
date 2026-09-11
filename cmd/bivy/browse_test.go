@@ -575,7 +575,7 @@ func TestQDoesNotQuitFromTheSearchBox(t *testing.T) {
 	b.eventually(t, "Nothing to show")
 	b.screen.press(key('/'))
 	b.screen.typed("q")
-	b.eventually(t, "search: q")
+	b.eventually(t, ":search q")
 
 	select {
 	case <-b.done:
@@ -593,9 +593,9 @@ func TestSearchReplacesTheListAndPlaysTheSameWay(t *testing.T) {
 	b.eventually(t, "The newest thing")
 
 	b.screen.press(key('/'))
-	b.eventually(t, "search:")
+	b.eventually(t, ":search ")
 	b.screen.typed("terminal video")
-	b.eventually(t, "search: terminal video")
+	b.eventually(t, ":search terminal video")
 	b.screen.press(named(term.KeyEnter))
 
 	b.eventually(t, "A Search Result")
@@ -627,10 +627,10 @@ func TestTypingACommandLetterTypesIt(t *testing.T) {
 	b.start(t)
 	b.eventually(t, "The newest thing")
 	b.screen.press(key('/'))
-	b.eventually(t, "search:")
+	b.eventually(t, ":search ")
 
 	b.screen.typed("jkqrg")
-	b.eventually(t, "search: jkqrg")
+	b.eventually(t, ":search jkqrg")
 
 	b.screen.press(named(term.KeyEnter))
 	b.eventually(t, "A Search Result")
@@ -648,14 +648,17 @@ func TestBackspaceInTheSearchBox(t *testing.T) {
 	b.eventually(t, "Nothing to show")
 	b.screen.press(key('/'))
 	b.screen.typed("cats")
-	b.eventually(t, "search: cats")
+	b.eventually(t, ":search cats")
 
 	b.screen.press(named(term.KeyBackspace), named(term.KeyBackspace))
-	b.eventually(t, "search: ca_")
+	b.eventually(t, ":search ca_")
 
-	// Backspacing past the start is not an error and not a crash.
-	b.screen.press(named(term.KeyBackspace), named(term.KeyBackspace), named(term.KeyBackspace))
-	b.eventually(t, "search: _")
+	// Backspacing past the start eats the command name too — it is one line,
+	// not a box with a label on it — and then stops rather than crashing.
+	for range 20 {
+		b.screen.press(named(term.KeyBackspace))
+	}
+	b.eventually(t, ":_")
 	b.quit(t)
 }
 
@@ -668,11 +671,11 @@ func TestTheSearchBoxStopsAtItsLimit(t *testing.T) {
 	b.eventually(t, "Nothing to show")
 	b.screen.press(key('/'))
 	b.screen.typed(strings.Repeat("a", queryLimit+20))
-	b.eventually(t, "search: "+strings.Repeat("a", 40))
+	b.eventually(t, ":search "+strings.Repeat("a", 40))
 	b.quit(t)
 
-	if len(br.query) > queryLimit {
-		t.Errorf("the box holds %d characters, and the limit is %d", len(br.query), queryLimit)
+	if len(br.line) > queryLimit {
+		t.Errorf("the line holds %d characters, and the limit is %d", len(br.line), queryLimit)
 	}
 }
 
@@ -688,7 +691,7 @@ func TestEscapeFromTheSearchBoxChangesNothing(t *testing.T) {
 	before := len(b.feeds.asked())
 	b.screen.press(key('/'))
 	b.screen.typed("cats")
-	b.eventually(t, "search: cats")
+	b.eventually(t, ":search cats")
 	b.screen.press(named(term.KeyEscape))
 
 	b.eventually(t, "The newest thing")
@@ -819,5 +822,159 @@ func TestRefreshOnResultsSearchesAgain(t *testing.T) {
 
 	if got := b.finder.queries(); len(got) != 2 {
 		t.Errorf("searched %v, want the same query twice", got)
+	}
+}
+
+// The reason there is a command line at all: after a search, the channel is a
+// column the user is reading and its identifier is not. Following it should
+// not mean quitting, typing a command, and starting again.
+func TestFollowAChannelByTheNameOnScreen(t *testing.T) {
+	b := newBrowser(t)
+	b.finder.results = []media.Video{
+		{ID: "sssssssssss", Title: "A Search Result", Author: "Aye", ChannelID: chanA},
+	}
+
+	br := b.start(t)
+	b.eventually(t, "Nothing to show")
+	b.screen.press(key('/'))
+	b.screen.typed("something")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "A Search Result")
+
+	b.screen.press(key(':'))
+	b.eventually(t, "follow")
+	b.screen.typed("follow Aye")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "following Aye")
+	b.quit(t)
+
+	if _, found := br.state.Find(chanA); !found {
+		t.Error("the channel was not followed")
+	}
+
+	// And it survives, because the point of following is the next launch.
+	var saved follow.State
+	if err := b.store.ReadJSON(stateFile, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := saved.Find(chanA); !found {
+		t.Error("the follow was not written to disk")
+	}
+}
+
+func TestFollowByHandleFromTheCommandLine(t *testing.T) {
+	b := newBrowser(t)
+
+	br := b.start(t)
+	b.eventually(t, "Nothing to show")
+	b.screen.press(key(':'))
+	b.screen.typed("follow @aye")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "following Aye")
+	b.quit(t)
+
+	if _, found := br.state.Find(chanA); !found {
+		t.Error("the handle was not resolved and followed")
+	}
+}
+
+func TestUnfollowFromTheCommandLine(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	br := b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(key(':'))
+	b.screen.typed("unfollow Aye")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "unfollowed Aye")
+	b.quit(t)
+
+	if _, found := br.state.Find(chanA); found {
+		t.Error("the channel is still followed")
+	}
+}
+
+// Tab completes as far as the matches agree, so the line can be driven without
+// remembering how anything is spelled.
+func TestTabCompletesTheCommandLine(t *testing.T) {
+	b := newBrowser(t)
+
+	br := b.start(t)
+	b.eventually(t, "Nothing to show")
+	b.screen.press(key(':'), key('f'), named(term.KeyTab))
+	b.eventually(t, ":follow _")
+
+	// Escape abandons the line rather than leaving it to reappear next time.
+	b.screen.press(named(term.KeyEscape))
+	b.eventually(t, "Nothing to show")
+	b.quit(t)
+
+	if br.line != "" {
+		t.Errorf("an abandoned line survived as %q", br.line)
+	}
+}
+
+func TestAnUnknownCommandIsReportedOnScreen(t *testing.T) {
+	b := newBrowser(t)
+
+	b.start(t)
+	b.eventually(t, "Nothing to show")
+	b.screen.press(key(':'))
+	b.screen.typed("serach cats")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "did you mean search")
+	b.quit(t)
+}
+
+// :quit is a command because it is rare, and it has to actually work.
+func TestQuitFromTheCommandLine(t *testing.T) {
+	b := newBrowser(t)
+
+	b.start(t)
+	b.eventually(t, "Nothing to show")
+	b.screen.press(key(':'))
+	b.screen.typed("quit")
+	b.screen.press(named(term.KeyEnter))
+
+	select {
+	case <-b.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal(":quit did not end the session")
+	}
+}
+
+// :search is the same surface the / key opens, so it has to behave the same.
+func TestSearchFromTheCommandLine(t *testing.T) {
+	b := newBrowser(t)
+
+	b.start(t)
+	b.eventually(t, "Nothing to show")
+	b.screen.press(key(':'))
+	b.screen.typed("search cats")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "A Search Result")
+	b.quit(t)
+
+	if got := b.finder.queries(); len(got) != 1 || got[0] != "cats" {
+		t.Errorf("searched for %v, want one query for cats", got)
+	}
+}
+
+// Following something that is not on screen and is not an identifier says so
+// rather than reaching the network with it.
+func TestFollowingSomethingThatIsNotHere(t *testing.T) {
+	b := newBrowser(t)
+
+	b.start(t)
+	b.eventually(t, "Nothing to show")
+	b.screen.press(key(':'))
+	b.screen.typed("follow Nobody At All")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "no channel called")
+	b.quit(t)
+
+	if asked := b.feeds.asked(); len(asked) != 0 {
+		t.Errorf("a name that resolved to nothing still reached the network: %v", asked)
 	}
 }

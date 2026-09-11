@@ -60,8 +60,10 @@ type Dashboard struct {
 	// Query is what is being searched for. Non-empty means the rows are
 	// results rather than the dashboard.
 	Query string
-	// Typing means the search box has the keyboard, so the headline is a
-	// prompt and the hints change.
+	// Line is what has been typed into the command line, and Typing means it
+	// has the keyboard — so the headline is a prompt and the rows underneath
+	// are not what anyone is looking at.
+	Line   string
 	Typing bool
 }
 
@@ -77,12 +79,42 @@ const (
 )
 
 const (
-	keyHints    = "  ↑↓ move · enter play · / search · r refresh · q quit"
-	searchHints = "  enter search · esc cancel"
-	resultHints = "  ↑↓ move · enter play · / search again · esc back · q quit"
-	emptyHints  = "  / search · r refresh · q quit"
-	noResults   = "  / search again · esc back · q quit"
+	keyHints    = "  ↑↓ move · enter play · / search · : commands · r refresh · q quit"
+	searchHints = "  tab complete · enter run · esc cancel"
+	resultHints = "  ↑↓ move · enter play · / search again · : commands · esc back · q quit"
+	emptyHints  = "  / search · : commands · r refresh · q quit"
+	noResults   = "  / search again · : commands · esc back · q quit"
 )
+
+// completions lists what the line could still become, with a summary each.
+//
+// A command line that does not show what it accepts is a guessing game, and
+// the list is the half of the bargain that makes ADR-011's rule bearable: the
+// commands are few enough to print.
+func completions(d Dashboard, width int) string {
+	matches := Matching(d.Line)
+	if len(matches) == 0 {
+		return "  nothing by that name\n"
+	}
+
+	widest := 0
+	for _, c := range matches {
+		if n := len(c.Name) + len(c.Argument) + 1; n > widest {
+			widest = n
+		}
+	}
+
+	var b strings.Builder
+	for _, c := range matches {
+		spelling := c.Name
+		if c.Argument != "" {
+			spelling += " " + c.Argument
+		}
+		b.WriteString(pad(fmt.Sprintf("  %-*s  %s", widest, spelling, c.Summary), width))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
 
 // hints names only the keys that would do something. The hint line is the one
 // part of the screen a new user reads as instructions.
@@ -123,6 +155,7 @@ func Render(d Dashboard) string {
 	b.WriteString("\n\n")
 
 	if d.Typing {
+		b.WriteString(completions(d, width))
 		b.WriteString(footer(d, width, 0, 0))
 		return b.String()
 	}
@@ -261,7 +294,7 @@ func footer(d Dashboard, width, first, last int) string {
 func headline(d Dashboard, fresh int) string {
 	switch {
 	case d.Typing:
-		return "search: " + d.Query + "_"
+		return ":" + d.Line + "_"
 	case d.Query != "":
 		return fmt.Sprintf("bivy · %s for %s", plural(len(d.Rows), "result", "results"), d.Query)
 	case len(d.Rows) == 0:

@@ -23,6 +23,7 @@ func TestDecodeKey(t *testing.T) {
 		{"return", "\r", Press{Key: KeyEnter}, 1},
 		{"newline", "\n", Press{Key: KeyEnter}, 1},
 		{"backspace", "\x7f", Press{Key: KeyBackspace}, 1},
+		{"tab", "\t", Press{Key: KeyTab}, 1},
 		{"the other backspace", "\x08", Press{Key: KeyBackspace}, 1},
 		{"ctrl-c", "\x03", Press{Key: KeyInterrupt}, 1},
 		{"ctrl-d", "\x04", Press{Key: KeyInterrupt}, 1},

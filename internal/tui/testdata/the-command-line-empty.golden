@@ -1,0 +1,10 @@
+:_
+
+  search words      find videos by words
+  follow channel    add a channel: @handle, a URL, an id, or a name on screen
+  unfollow channel  stop following one, by name or id
+  refresh           fetch the feeds again
+  help              what the keys and commands do
+  quit              leave
+
+  tab complete · enter run · esc cancel
