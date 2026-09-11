@@ -347,6 +347,11 @@ that build, and `make dist-reproducible` is what runs before publishing: the
 same commit is built twice and the checksums compared, because a checksum over
 a single build says only which copy was uploaded.
 
+The compiler is part of the artefact, so `make dist` pins it to the version
+`go.mod` names rather than taking whichever Go is installed — the offer to
+rebuild a tag and compare bytes is worth nothing if the rebuild uses a
+different compiler. CI reads its Go version from the same line.
+
 Releases ship with a review packet in `docs/review/`, named for the version,
 stating what was checked and what was not. The workflow refuses to publish
 without one, and the packet is the release notes — one document rather than two

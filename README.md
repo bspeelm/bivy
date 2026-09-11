@@ -137,9 +137,15 @@ install -Dm755 bivy_<version>_<os>_<arch>/bivy ~/.local/bin/bivy
 Those checksums catch a damaged download. They are not signatures and they do
 not tell you who built the archive: anyone who could replace an archive could
 replace the checksum file sitting beside it. What stands in for a signature is
-that the build is reproducible — the archives are built twice from the tagged
-commit and compared before publishing, so `make dist` on a checkout of the same
-tag produces the same bytes for you to compare against yourself (ADR-014).
+that the build is reproducible — `make dist` on a clean checkout of the tag
+produces the published archives byte for byte, so you can rebuild and compare
+instead of trusting the upload (ADR-014).
+
+Two conditions, both of which that command handles or Go enforces: it pins the
+compiler to the version named in `go.mod`, because two Go releases turn the
+same source into different binaries; and the checkout has to be clean, because
+Go stamps the commit it built from — and whether the tree was modified — into
+the binary itself.
 
 Or build it, which needs Go and nothing else:
 

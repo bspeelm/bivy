@@ -273,6 +273,39 @@ func TestTheReleaseClaimIsBackedByAWorkflow(t *testing.T) {
 	}
 }
 
+// Rebuilding a tag and comparing bytes is the offer that stands in for a
+// signature, and it is worth nothing if the rebuild uses a different compiler:
+// two Go releases turn the same source into different binaries. One line in
+// go.mod answers it for the release build and for CI both.
+func TestTheReproducibleBuildPinsItsCompiler(t *testing.T) {
+	if !strings.Contains(read(t, "README.md"), "byte for byte") {
+		t.Skip("the README no longer offers a byte-for-byte rebuild")
+	}
+
+	dist := read(t, filepath.FromSlash("scripts/dist.sh"))
+	if !strings.Contains(dist, "GOTOOLCHAIN") {
+		t.Error("scripts/dist.sh does not pin GOTOOLCHAIN, so a release is built by whichever Go is installed")
+	}
+	if !strings.Contains(dist, "go.mod") {
+		t.Error("scripts/dist.sh pins a compiler version that go.mod does not name")
+	}
+
+	dir := filepath.Join(".github", "workflows")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		body := read(t, filepath.Join(dir, e.Name()))
+		if !strings.Contains(body, "setup-go") {
+			continue
+		}
+		if !strings.Contains(body, "go-version-file: go.mod") {
+			t.Errorf("%s sets up Go from something other than go.mod, which is the line the release build pins to", e.Name())
+		}
+	}
+}
+
 // docs/review/ says in prose whether a release has happened yet. That sentence
 // is read by someone deciding whether to trust the directory, and it is the
 // kind of sentence that stays true for exactly one release.
