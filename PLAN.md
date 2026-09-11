@@ -321,6 +321,11 @@ count above is the thing to watch — a fourth kind is a decision, not a detail.
   without mpv being installed. A test that asks whether something is installed
   passes where it was written and fails where the artifact is built.
 - **The isolation test** in §8, against a scratch home directory.
+- **The integration tests on a schedule, and never on a pull request.** They
+  need a real mpv, a real extractor and the live network; the gate needs none
+  of the three. A failure there is news about a third party rather than a
+  broken diff, and a gate that reddens for reasons no diff can cause is one
+  people learn to ignore.
 - **The prose compiler**, `docs_test.go`, which holds the README and this
   document against the files that define what they claim.
 - The floor in §0 is one test line per three code lines. It is a floor and not

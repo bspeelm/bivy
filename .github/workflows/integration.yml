@@ -1,0 +1,73 @@
+# The tests that need a real mpv, a real extractor and the live network.
+#
+# Never on a pull request. These depend on a third party that has, in this
+# project's own history, refused every request for hours while the rest of its
+# site answered normally — that outage is what ADR-013 exists for. A gate that
+# goes red for reasons the diff cannot cause is a gate people learn to ignore,
+# so this runs on its own and blocks nothing. A failure here is information
+# about the outside world, which is exactly what it is for.
+#
+# `make check` stays the gate, and it requires none of this installed.
+name: integration
+
+on:
+  schedule:
+    # Daily. Often enough to notice the extractor or the feed format moving,
+    # rarely enough that a flaky third party is not a daily alarm.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: mpv and the extractor
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mpv xvfb
+          # Not from the distribution: the extractor is the part of this stack
+          # that rots fastest, and a packaged one is old by the time it lands.
+          sudo curl -fsSL -o /usr/local/bin/yt-dlp \
+            https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
+          sudo chmod +x /usr/local/bin/yt-dlp
+          mpv --version | head -1
+          yt-dlp --version
+
+      - name: mpv and the extractor
+        if: runner.os == 'macOS'
+        run: |
+          brew install mpv yt-dlp
+          mpv --version | head -1
+          yt-dlp --version
+
+      # No display here, and bivy only asks for a window once something plays,
+      # so the socket, the flags and the process hygiene are all covered
+      # without one. The test that plays a video skips unless it is told what
+      # to play, and on macOS it is not told: a runner with no GUI session
+      # cannot open mpv's window, and a skip is the honest result.
+      - run: make integration
+
+      # Playback for real, under a virtual display. This is the fragile step
+      # and it is deliberately last: bivy asks mpv for --vo=gpu, which here
+      # falls to software rendering, and it reaches the live service for the
+      # stream. When it breaks, read it as news rather than as a regression
+      # until the run before it is checked.
+      - name: a real video, played to its end
+        if: runner.os == 'Linux'
+        env:
+          BIVY_PLAY_TEST: jNQXAC9IVRw
+        run: xvfb-run -a go test -tags=integration -run TestRealMPVPlaysAVideoToItsEnd -v ./internal/mpv/
