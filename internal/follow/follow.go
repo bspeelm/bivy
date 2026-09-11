@@ -12,7 +12,10 @@ package follow
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/bspeelm/bivy/internal/media"
@@ -35,6 +38,56 @@ type Channel struct {
 // file would give an attacker (ADR-001).
 type State struct {
 	Channels []Channel `json:"channels"`
+	// Watched is when each video was watched to its end. A map so that asking
+	// about one is a lookup rather than a scan of everything ever seen.
+	Watched map[string]time.Time `json:"watched,omitempty"`
+}
+
+// WatchedCap bounds the history: unbounded, this is the one part of bivy that
+// grows for the life of the install. The oldest entries go, so a video watched
+// long ago can appear unwatched again — the right way round, because the
+// alternative is a permanent record of everything its user ever watched.
+const WatchedCap = 2000
+
+// MarkWatched records that a video was watched to its end.
+func MarkWatched(s State, videoID string, now time.Time) State {
+	if !media.IsVideoID(videoID) {
+		return s
+	}
+
+	watched := make(map[string]time.Time, len(s.Watched)+1)
+	maps.Copy(watched, s.Watched)
+	watched[videoID] = now.UTC()
+
+	next := State{Channels: append([]Channel(nil), s.Channels...), Watched: watched}
+	next.trimWatched()
+	return next
+}
+
+// HasWatched reports whether a video has been watched to its end.
+func (s State) HasWatched(videoID string) bool {
+	_, ok := s.Watched[videoID]
+	return ok
+}
+
+// trimWatched drops the oldest entries once the history is over its cap.
+func (s *State) trimWatched() {
+	if len(s.Watched) <= WatchedCap {
+		return
+	}
+
+	// Oldest first, and by identifier where two share a timestamp, so which
+	// entries survive does not depend on map ordering.
+	ids := slices.Collect(maps.Keys(s.Watched))
+	slices.SortFunc(ids, func(a, b string) int {
+		if c := s.Watched[a].Compare(s.Watched[b]); c != 0 {
+			return c
+		}
+		return strings.Compare(a, b)
+	})
+	for _, id := range ids[:len(s.Watched)-WatchedCap] {
+		delete(s.Watched, id)
+	}
 }
 
 // ErrAlreadyFollowed is returned rather than silently doing nothing, because
@@ -65,14 +118,14 @@ func (s State) Add(c Channel, now time.Time) (State, error) {
 	// first dashboard, none of them marked.
 	c.LastVisit = now.UTC()
 
-	next := State{Channels: append(append([]Channel(nil), s.Channels...), c)}
+	next := State{Channels: append(append([]Channel(nil), s.Channels...), c), Watched: s.Watched}
 	next.sort()
 	return next, nil
 }
 
 // Remove unfollows a channel, reporting whether it was followed at all.
 func (s State) Remove(id string) (State, bool) {
-	next := State{}
+	next := State{Watched: s.Watched}
 	for _, c := range s.Channels {
 		if c.ID != id {
 			next.Channels = append(next.Channels, c)
@@ -100,6 +153,9 @@ type Row struct {
 	Channel string
 	// New reports that this was published since the last visit.
 	New bool
+	// Watched reports that it was played to its end. It outranks New on
+	// screen: something already watched is not news, whenever it arrived.
+	Watched bool
 }
 
 // Dashboard is what to show on launch: what the followed channels' feeds
@@ -120,10 +176,12 @@ func Dashboard(s State, fetched []media.Channel, limit int) []Row {
 			name = ch.Title
 		}
 		for _, v := range ch.Videos {
+			watched := s.HasWatched(v.ID)
 			rows = append(rows, Row{
 				Video:   v,
 				Channel: name,
-				New:     v.Published.After(followed.LastVisit),
+				New:     !watched && v.Published.After(followed.LastVisit),
+				Watched: watched,
 			})
 		}
 	}
@@ -150,7 +208,7 @@ func Visited(s State, fetched []media.Channel, now time.Time) State {
 		seen[ch.ID] = true
 	}
 
-	next := State{Channels: append([]Channel(nil), s.Channels...)}
+	next := State{Channels: append([]Channel(nil), s.Channels...), Watched: s.Watched}
 	for i := range next.Channels {
 		if seen[next.Channels[i].ID] {
 			next.Channels[i].LastVisit = now.UTC()
@@ -169,7 +227,7 @@ func Retitle(s State, fetched []media.Channel) State {
 		}
 	}
 
-	next := State{Channels: append([]Channel(nil), s.Channels...)}
+	next := State{Channels: append([]Channel(nil), s.Channels...), Watched: s.Watched}
 	for i := range next.Channels {
 		if t, ok := titles[next.Channels[i].ID]; ok {
 			next.Channels[i].Title = t

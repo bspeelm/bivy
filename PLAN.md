@@ -172,6 +172,7 @@ quietly is how this stops being testable, so each names what disagrees with it.
 |---|---|
 | `cmd/bivy` | entry point, flag parsing |
 | `internal/media` | the domain types, so that nothing which renders a video imports what fetches one |
+| `internal/term` | raw mode, the alternate screen, key decoding, redraw. The interactive half of the tui split (ADR-009) |
 | `internal/config` | TOML configuration |
 | `internal/feed` | fetch and parse per-channel XML feeds. **Sole `net/http` importer.** |
 | `internal/ytdlp` | subprocess only: resolve a search query, resolve a stream URL |
@@ -214,6 +215,7 @@ mpv version that makes the gate deletable.
 | README claims match the Makefile | `docs_test.go` |
 | §0 budgets match the script | `docs_test.go` |
 | The decision log is contiguous and states status | `docs_test.go` |
+| The dependency stays at one | `make budgets`, and §0 |
 | No local filesystem detail in tracked files | `docs_test.go`, and the conformance check |
 | The founding documents exist | `make standard` |
 
@@ -230,10 +232,22 @@ one. ADR-004.
 
 ## §7 Playback and process hygiene
 
-- mpv is a child process with an IPC socket, not a fire-and-forget `exec`.
-- The socket lives in a `0700` directory under the runtime directory, and is
-  removed on exit.
-- No stream URL appears in any `argv`, because `argv` is world-readable.
+- mpv is a child process with an IPC socket, not a fire-and-forget `exec`. One
+  process serves a whole session; a second video reuses it.
+- No window is forced while mpv is idle. bivy says on its own status line that
+  something is loading, and a forced window is an empty pane for the rest of
+  the session — with no title bar to close it by, where the compositor offers
+  no decorations.
+- mpv is asked to quit, never killed while it will still answer. A killed mpv
+  can outlive the process that killed it.
+- The socket lives in a `0700` directory under the runtime directory — or the
+  system temporary directory where there is none, which is every Mac — and is
+  removed on exit, including when startup failed.
+- No stream URL appears in any `argv`, because `argv` is world-readable. What
+  bivy sends mpv is a page URL built from a checked identifier, and the
+  resolved URL never leaves mpv (ADR-010).
+- A video is marked watched when it reaches its own end, not when it starts. A
+  video opened and abandoned has not been watched.
 - **Every positional argument to an external process is preceded by `--`, and
   any input beginning with `-` is refused before it reaches an argv.** This is
   a real defect found in a reviewed program of this kind, where an option-shaped
@@ -279,9 +293,10 @@ bivy makes exactly three kinds of outbound request:
 2. **One channel-page fetch**, from `internal/feed`, when a handle is followed
    — the only time bivy reads a page meant for a browser, and never at launch.
    ADR-008.
-3. **Extractor calls**, from `internal/ytdlp`, which are subprocess executions
-   rather than requests bivy makes itself — one to resolve a search query, one
-   to resolve a stream URL. Not built yet.
+3. **Extractor calls.** For playback these are made by mpv rather than by bivy
+   (ADR-010). For search they will come from `internal/ytdlp`, which is not
+   built yet. Either way they are subprocess executions rather than requests
+   bivy makes itself.
 
 Nothing else. No analytics, no update check, no crash reporting, no ping. The
 budget in §0 is what makes this checkable rather than merely stated: one
@@ -296,8 +311,10 @@ count above is the thing to watch — a fourth kind is a decision, not a detail.
 - **Fuzzing on the feed parser**, because it is the one place remote bytes are
   parsed.
 - **A table test on argument construction** for both external processes,
-  covering option-shaped input. Until one exists, the same table covers the
-  argument parsing that decides what may become one.
+  covering option-shaped input.
+- **A stand-in for mpv** that speaks its IPC protocol, so the player is tested
+  without mpv being installed. A test that asks whether something is installed
+  passes where it was written and fails where the artifact is built.
 - **The isolation test** in §8, against a scratch home directory.
 - **The prose compiler**, `docs_test.go`, which holds the README and this
   document against the files that define what they claim.
@@ -309,7 +326,14 @@ count above is the thing to watch — a fourth kind is a decision, not a detail.
 ## §11 CI and release
 
 `make check` is the gate: lint, vet, race tests, budgets, then the conformance
-check. It is what CI runs and what must pass before a commit.
+check. It is what CI runs and what must pass before a commit — on Linux and on
+macOS both, because `internal/store` chooses its directories by platform and a
+branch nothing runs is a branch nobody has tried. `make crossbuild` compiles
+every platform the README claims, on every check.
+
+The conformance check skips in CI rather than failing: the development
+standard lives outside this repository and is not checked out beside it. That
+is the one part of the gate a green CI run does not prove.
 
 Releases ship with a review packet in `docs/review/`, stating what was checked
 and what was not. There is no version yet and no release process yet; this
@@ -328,7 +352,7 @@ executed.
 |---|---|---|
 | 0 | **The skeleton.** Founding documents, budgets armed, prose compiler. | ✅ the conformance check prints `conformant.` |
 | 1 | **Follow and dashboard.** Add a channel, fetch feeds, show what is new since the last visit. No player yet. | ✅ a followed channel's new videos are listed on launch |
-| 2 | **Play.** mpv over IPC. | enter on a dashboard row plays it in an mpv window and marks it watched |
+| 2 | **Play.** mpv over IPC. | ✅ enter on a dashboard row plays it in an mpv window and marks it watched |
 | 3 | **Search.** Extractor-backed query into the same list model. | a query returns rows that play the same way |
 | 4 | **Thumbnails.** Capability probe, kitty-protocol grid, text-only fallback where the protocol is absent. | the grid renders where supported and degrades where not |
 
@@ -342,10 +366,9 @@ directory afterwards contains exactly the two directories from §8.
 
 Named here so they are decided deliberately rather than discovered.
 
-- **Which terminal-interface library.** Milestone 1 turned out not to need
-  one: a dashboard that prints and exits needs a renderer, not a terminal
-  library. The decision moves to milestone 2, which has something to press a
-  key on, and is made by ADR before the first import.
+- ~~**Which terminal-interface library.**~~ Settled by ADR-009: none. The
+  interactive layer is written here over `golang.org/x/term`, which is the
+  project's one direct dependency.
 - **The §0 numbers themselves.** They were drafted before there was code to
   measure. They are armed now, which is the point; tightening them once the
   shape of the code is known is expected and is a commit to §0.

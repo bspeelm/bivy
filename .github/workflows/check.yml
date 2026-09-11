@@ -1,0 +1,42 @@
+# The gate, run where it is not the maintainer's machine.
+#
+# PLAN.md §11 says `make check` is what CI runs. This is the file that makes
+# that sentence true, and docs_test.go holds the two together.
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # Both platforms the README claims, because internal/store chooses its
+    # directories by GOOS and a branch nothing runs is a branch nobody has
+    # tried.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # The whole gate: lint, vet, race tests, budgets, and the conformance
+      # check. The last skips here rather than failing: the development
+      # standard lives outside this repository and is not checked out beside
+      # it.
+      - run: make check
+
+      # Every platform the project claims to run on, compiled on every check,
+      # because a build that only ever happens on one machine is a claim about
+      # one machine.
+      - run: make crossbuild
+        if: matrix.os == 'ubuntu-latest'
