@@ -36,13 +36,11 @@ type Channel struct {
 // Text is remote text made safe to print.
 //
 // Control characters are removed at the boundary rather than left to whatever
-// draws the screen. A renderer that discards sequences it does not recognise
-// is mitigation by accident: it still honours the ones it does recognise, and
-// a hyperlink escape in a title points wherever the feed wants it to.
-//
-// What is left of a sequence — the "[31m" after a stripped escape — stays, as
-// inert text. Removing sequences whole would mean writing the parser this
-// function exists so that nothing has to depend on.
+// draws the screen: a renderer that discards sequences it does not recognise
+// still honours the ones it does, and a hyperlink escape in a title points
+// wherever the feed wants it to. What is left of a sequence stays as inert
+// text, because removing them whole means writing the parser this function
+// exists so that nothing has to depend on.
 //
 // Runs of whitespace collapse to one space, because a title is one line.
 func Text(s string) string {
@@ -94,8 +92,8 @@ func IsChannelID(s string) bool {
 	return true
 }
 
-// IsVideoID reports whether s is shaped like a video identifier. Same reasoning
-// as IsChannelID, and the same treatment.
+// IsVideoID reports whether s is shaped like a video identifier. Same
+// reasoning as IsChannelID.
 func IsVideoID(s string) bool {
 	const width = 11
 	if len(s) != width {

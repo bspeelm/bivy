@@ -252,3 +252,66 @@ What keeps it bounded, and what a reviewer should check has not slipped:
 
 This is why §9 names three kinds of outbound request rather than two, and the
 count is the thing to keep an eye on: a fourth is a decision, not a detail.
+
+---
+
+## ADR-009 — The interactive layer is written here, not taken from a terminal framework
+
+**Status:** accepted, milestone 2. This supersedes the open question in §13.
+
+The obvious choice is a terminal framework. They are good, they are what
+everyone reaches for, and they solve the fiddly parts — raw mode, resize,
+key decoding — that are exactly the parts easy to get subtly wrong.
+
+The counter-argument that decided it is the dependency arithmetic. The
+budget in §0 is six direct dependencies and twenty-five modules, and the
+frameworks in this language cost fifteen to twenty modules on their own. Paying
+most of a whole-project budget, in one commit, for a list with a cursor on it,
+is the trade §0 exists to make visible. What bivy needs is raw mode, four keys,
+a redraw and a window that follows the cursor.
+
+The second reason is milestone 4. A thumbnail grid speaks a graphics protocol
+directly, in bytes, and a framework's renderer is the thing standing between
+bivy and the terminal when that happens. Owning the output path is worth more
+here than it would be in a program that only ever draws text.
+
+What is taken instead is one dependency, `golang.org/x/term`, for `MakeRaw`,
+`Restore` and `GetSize`. Those are termios calls; hand-rolling them means
+platform-specific ioctl code, which is real risk for no saving. One direct
+dependency, two modules, and a reviewer can read all of it.
+
+**What would reopen this:** the interactive layer growing past roughly four
+hundred lines, or needing a second screen with its own layout and focus rules.
+Either means bivy has become the kind of program a framework is for.
+
+---
+
+## ADR-010 — mpv resolves the stream itself; bivy hands it a page URL
+
+**Status:** accepted, milestone 2.
+
+bivy sends mpv the video's own page URL over the IPC socket and lets mpv's
+extractor hook resolve it. bivy does not run the extractor itself for playback.
+
+The alternative is bivy running `yt-dlp` to obtain a direct stream URL and
+handing that to mpv. It buys control over format selection and puts extractor
+failures in bivy's own error messages, and it is what §4 anticipated. It is not
+done yet because it duplicates work mpv already does, doubles the number of
+places an extractor is invoked, and adds a package this milestone does not
+otherwise need. Milestone 3 introduces `internal/ytdlp` for search; if format
+control turns out to matter, that is when it is cheap to revisit.
+
+This does not weaken §7. The URL bivy sends is built from a video identifier it
+has checked, and it travels over the socket rather than an argv. mpv then puts
+that same public page URL on yt-dlp's command line — but the **resolved** URL,
+the one carrying access tokens, is passed back to mpv internally and never
+appears in any process table entry. The property §7 is protecting is preserved
+by this arrangement rather than despite it.
+
+What it costs: yt-dlp becomes a runtime requirement for playback rather than
+only for search, and an extractor failure surfaces as mpv saying it could not
+play something. Both are stated in the README rather than discovered.
+
+**What would reopen this:** needing to choose a format, needing to know why a
+resolve failed, or milestone 3 making the extractor a package that already
+exists.
