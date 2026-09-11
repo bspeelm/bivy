@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -167,7 +168,7 @@ func TestRenderStaysInsideItsWidth(t *testing.T) {
 		// no cells, and counting it as though it did would make this test pass
 		// by accident on a line that overflows.
 		for _, line := range strings.Split(Render(d), "\n") {
-			if n := len([]rune(plain(line))); n > limit {
+			if n := cells(line); n > limit {
 				t.Errorf("at width %d a line is %d wide:\n%s", width, n, plain(line))
 			}
 		}
@@ -455,9 +456,22 @@ func TestNoWindowCountWhenNoRowsAreDrawn(t *testing.T) {
 
 // plain is a rendered frame with its attributes removed, for the tests that
 // are about what it says rather than how it looks.
-var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+var ansi = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 func plain(frame string) string { return ansi.ReplaceAllString(frame, "") }
+
+// cells is what a rendered line occupies on screen: its printable characters
+// plus whatever the cursor was moved past without writing.
+var cursorForward = regexp.MustCompile(`\x1b\[([0-9]+)C`)
+
+func cells(line string) int {
+	n := len([]rune(plain(line)))
+	for _, m := range cursorForward.FindAllStringSubmatch(line, -1) {
+		skipped, _ := strconv.Atoi(m[1])
+		n += skipped
+	}
+	return n
+}
 
 // The completion list is the half of the bargain that makes a command line
 // bearable: it shows what exists rather than asking anyone to remember.
@@ -532,51 +546,91 @@ func TestTheChannelListOffersFollowNotPlay(t *testing.T) {
 	}
 }
 
-// A picture takes rows from the list, and a short terminal has none to give:
-// one row and a thumbnail is a thumbnail of something nobody can scroll away
-// from.
-func TestAPictureYieldsToAShortScreen(t *testing.T) {
-	d := Dashboard{Art: "<art>", ArtRows: 7}
+// The picture scales with the window: a stamp on a large display is a waste,
+// and one that grows without limit takes the screen away from the titles it is
+// illustrating.
+func TestThePictureScalesWithTheWindow(t *testing.T) {
+	var previous int
+	for _, width := range []int{80, 120, 160, 200} {
+		cols, rows := ArtBox(width, 40)
+		if cols == 0 {
+			t.Fatalf("no picture at width %d", width)
+		}
+		if cols < previous {
+			t.Errorf("at width %d the picture is %d cells and at %d it was %d", width, cols, width-40, previous)
+		}
+		previous = cols
 
-	if got := d.artRows(20); got != 7 {
-		t.Errorf("with 20 rows the picture got %d, want 7", got)
-	}
-	if got := d.artRows(10); got != 0 {
-		t.Errorf("with 10 rows the picture got %d, leaving %d for the list", got, 10-got)
-	}
-	if got := d.artRows(11); got != 7 {
-		t.Errorf("with 11 rows the picture got %d, want 7", got)
+		if cols > maxArtCols {
+			t.Errorf("at width %d the picture is %d cells, past the cap of %d", width, cols, maxArtCols)
+		}
+		if width-cols < minList {
+			t.Errorf("at width %d the picture leaves %d cells for titles", width, width-cols)
+		}
+		// Sixteen by nine, in cells about twice as tall as they are wide.
+		if want := cols * 9 / 16 / 2; rows != want {
+			t.Errorf("a %d-cell picture is %d rows, want %d", cols, rows, want)
+		}
 	}
 }
 
-func TestNoPictureNoRows(t *testing.T) {
-	if got := (Dashboard{ArtRows: 7}).artRows(20); got != 0 {
-		t.Errorf("a frame with no picture reserved %d rows", got)
-	}
-	if got := (Dashboard{Art: "<art>"}).artRows(20); got != 0 {
-		t.Errorf("a picture of no height reserved %d rows", got)
+// A window with no room for one has none, rather than a picture squeezing the
+// titles out.
+func TestNoPictureWhereThereIsNoRoom(t *testing.T) {
+	for _, size := range [][2]int{{40, 24}, {80, 8}, {30, 30}, {0, 0}} {
+		if cols, rows := ArtBox(size[0], size[1]); cols != 0 || rows != 0 {
+			t.Errorf("a %dx%d window got a %dx%d picture", size[0], size[1], cols, rows)
+		}
 	}
 }
 
-// The picture is drawn and the list still fits between the rules.
-func TestAFrameWithAPictureIsStillTheRightHeight(t *testing.T) {
-	const height = 24
-	with := Render(Dashboard{
-		Now: now, Interactive: true, Height: height, Width: 80,
-		Rows: manyRows(30), Art: "<art>", ArtRows: 7,
-	})
-	without := Render(Dashboard{
-		Now: now, Interactive: true, Height: height, Width: 80,
-		Rows: manyRows(30),
-	})
-
-	// The picture is one string occupying rows the frame steps over, so the
-	// line counts match: what it costs is list rows, not frame rows.
-	if a, b := strings.Count(with, "\n"), strings.Count(without, "\n"); a != b {
-		t.Errorf("a frame with a picture is %d lines and one without is %d", a, b)
+// The titles run beside the picture, in one column — including the rows below
+// it, so they do not step left half way down the list.
+func TestTitlesFormOneColumnBesideThePicture(t *testing.T) {
+	d := Dashboard{
+		Rows: manyRows(12), Now: now, Width: 100, Height: 24,
+		Interactive: true, Art: "<art>",
 	}
-	if !strings.Contains(with, "<art>") {
-		t.Error("the picture was not drawn")
+	frame := Render(d)
+
+	var indents []string
+	for _, line := range strings.Split(frame, "\n") {
+		if !strings.Contains(line, "Video number") {
+			continue
+		}
+		m := cursorForward.FindStringSubmatch(line)
+		if m == nil {
+			t.Errorf("a row does not step past the picture:\n%q", line)
+			continue
+		}
+		indents = append(indents, m[1])
+	}
+	if len(indents) < 6 {
+		t.Fatalf("only %d rows drawn; the frame has stopped matching", len(indents))
+	}
+	for _, got := range indents[1:] {
+		if got != indents[0] {
+			t.Errorf("rows are indented %s and %s; the titles do not line up", indents[0], got)
+		}
+	}
+}
+
+// Only the highlighted row has a picture, and there is only ever one.
+func TestThereIsOnePicture(t *testing.T) {
+	d := Dashboard{
+		Rows: manyRows(12), Now: now, Width: 100, Height: 24,
+		Interactive: true, Selected: 3, Art: "<PIC>",
+	}
+	if got := strings.Count(Render(d), "<PIC>"); got != 1 {
+		t.Errorf("the frame draws %d pictures, want 1", got)
+	}
+}
+
+// A row with no picture is not indented into empty space.
+func TestWithoutAPictureNothingIsIndented(t *testing.T) {
+	d := Dashboard{Rows: manyRows(3), Now: now, Width: 100, Height: 24, Interactive: true}
+	if cursorForward.MatchString(Render(d)) {
+		t.Error("rows were indented with no picture to indent past")
 	}
 }
 

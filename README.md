@@ -99,13 +99,15 @@ else is a key. That rule is ADR-011 and it is what keeps the list short.
 ## Thumbnails
 
 Where your terminal speaks the kitty graphics protocol, the row under the
-cursor gets its thumbnail above the list. bivy asks the terminal whether it can
+cursor gets its thumbnail in a pane to the left of the titles. The pane is a
+quarter of the window, so it grows with the terminal and disappears on one too
+small to spare the room. bivy asks the terminal whether it can
 draw rather than guessing from `$TERM`, so moving between terminals is not
 something you have to configure — and where the answer is no, nothing changes
 and no stray bytes are printed.
 
-Pictures are fetched only for the row you are looking at, kept in memory for
-the session, and written nowhere. There is no thumbnail cache, because a
+One picture at a time, for the row you are looking at, kept in memory for the
+session and written nowhere. There is no thumbnail cache, because a
 thumbnail cache is a viewing history in image form in a directory you did not
 create.
 

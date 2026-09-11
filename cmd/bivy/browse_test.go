@@ -15,15 +15,17 @@ import (
 	"github.com/bspeelm/bivy/internal/media"
 	"github.com/bspeelm/bivy/internal/mpv"
 	"github.com/bspeelm/bivy/internal/term"
+	"github.com/bspeelm/bivy/internal/tui"
 	"github.com/bspeelm/bivy/internal/ytdlp"
 )
 
 // fakeScreen is a terminal that draws into a buffer and takes its keypresses
 // from a script. internal/term proves the decoding; this proves the loop.
 type fakeScreen struct {
-	draws  graphics.Capability
-	keys   chan term.Press
-	resize chan struct{}
+	draws   graphics.Capability
+	keys    chan term.Press
+	resizes chan struct{}
+	w, h    int
 
 	mu     sync.Mutex
 	frames []string
@@ -36,13 +38,34 @@ func key(r rune) term.Press       { return term.Press{Key: term.KeyRune, Rune: r
 func named(k term.Key) term.Press { return term.Press{Key: k} }
 
 func newScreen() *fakeScreen {
-	return &fakeScreen{keys: make(chan term.Press, 64), resize: make(chan struct{}, 1)}
+	return &fakeScreen{keys: make(chan term.Press, 64), resizes: make(chan struct{}, 1)}
 }
 
 func (s *fakeScreen) Graphics() graphics.Capability { return s.draws }
-func (s *fakeScreen) Size() (int, int)              { return 80, 24 }
 func (s *fakeScreen) Keys() <-chan term.Press       { return s.keys }
-func (s *fakeScreen) Resized() <-chan struct{}      { return s.resize }
+func (s *fakeScreen) Resized() <-chan struct{}      { return s.resizes }
+
+func (s *fakeScreen) Size() (int, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.w == 0 {
+		return 80, 24
+	}
+	return s.w, s.h
+}
+
+func (s *fakeScreen) width() int { w, _ := s.Size(); return w }
+
+// resize changes the window and says so, the way a terminal does.
+func (s *fakeScreen) resize(w, h int) {
+	s.mu.Lock()
+	s.w, s.h = w, h
+	s.mu.Unlock()
+	select {
+	case s.resizes <- struct{}{}:
+	default:
+	}
+}
 
 func (s *fakeScreen) Draw(frame string) error {
 	s.mu.Lock()
@@ -574,7 +597,7 @@ func TestResizeRedraws(t *testing.T) {
 	b.eventually(t, "The newest thing")
 
 	before := b.screen.frameCount()
-	b.screen.resize <- struct{}{}
+	b.screen.resize(90, 30)
 
 	deadline := time.After(5 * time.Second)
 	for b.screen.frameCount() <= before {
@@ -1233,7 +1256,7 @@ func TestOnlyTheRowUnderTheCursorGetsAPicture(t *testing.T) {
 	b.run(t, "follow", chanA)
 
 	b.start(t)
-	b.eventually(t, "<art 28x7 picture of aaaaaaaaaaa>")
+	b.eventually(t, "picture of aaaaaaaaaaa")
 
 	if got := b.art.asked(); len(got) != 1 || got[0] != "aaaaaaaaaaa" {
 		t.Errorf("fetched %v, want only the row under the cursor", got)
@@ -1323,5 +1346,31 @@ func TestAChannelRowHasNoPicture(t *testing.T) {
 
 	if got := b.art.asked(); len(got) != 0 {
 		t.Errorf("a list of channels fetched %v", got)
+	}
+}
+
+// The picture is drawn for the window it is in, so a window that changes shape
+// gets a picture that fits it rather than the one that fitted before.
+func TestThePictureIsRedrawnWhenTheWindowChanges(t *testing.T) {
+	b := newBrowser(t)
+	b.screen.draws = graphics.Kitty
+	b.app.art = b.art
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	cols, _ := tui.ArtBox(b.screen.width(), 24)
+	b.eventually(t, fmt.Sprintf("<art %dx", cols))
+
+	b.screen.resize(140, 40)
+	wider, _ := tui.ArtBox(140, 40)
+	if wider == cols {
+		t.Skip("the two window sizes ask for the same picture")
+	}
+	b.eventually(t, fmt.Sprintf("<art %dx", wider))
+	b.quit(t)
+
+	// Re-drawn, not re-fetched: the bytes did not change, only their size.
+	if got := len(b.art.asked()); got != 1 {
+		t.Errorf("%d fetches for one video at two sizes, want 1", got)
 	}
 }

@@ -91,9 +91,11 @@ type browser struct {
 	// art is the picture for the row under the cursor; pictures is what this
 	// session has fetched. In memory and nowhere else — a thumbnail cache on
 	// disk is a viewing history in image form (ADR-007).
-	art      string
-	pictures map[string][]byte
-	drawn    string
+	art       string
+	pictures  map[string][]byte
+	drawn     string
+	drawnCols int
+	drawnRows int
 
 	// query is what was searched for, empty on the dashboard; channels means
 	// those results are channels. line is what has been typed into the
@@ -621,27 +623,22 @@ func (b *browser) failedNow() []string {
 	return b.failed
 }
 
-// The box a thumbnail is drawn into, in cells: wide enough to be a picture
-// rather than a stamp, short enough to leave a list.
-const (
-	artCols = 28
-	artRows = 7
-)
-
-// picture is the drawn thumbnail for the row under the cursor, or nothing.
-// What is worth a request is what somebody is looking at: a list of thirty
-// rows is thirty pictures nobody asked for.
-func (b *browser) picture(ctx context.Context) string {
-	if b.app.art == nil || b.selected >= len(b.rows) {
+// picture is the drawn thumbnail for the row under the cursor: what is worth
+// a request is what somebody is looking at.
+func (b *browser) picture(ctx context.Context, cols, rows int) string {
+	if b.app.art == nil || cols < 1 || rows < 1 || b.selected >= len(b.rows) {
 		return ""
 	}
 	id := b.rows[b.selected].Video.ID
 	if id == "" {
 		return ""
 	}
-	if id == b.drawn {
+	// Redrawn when the window changes shape: a picture drawn for a box that
+	// no longer exists is the wrong size in the one that does.
+	if id == b.drawn && cols == b.drawnCols && rows == b.drawnRows {
 		return b.art
 	}
+	b.drawnCols, b.drawnRows = cols, rows
 
 	data, held := b.pictures[id]
 	if !held {
@@ -654,7 +651,7 @@ func (b *browser) picture(ctx context.Context) string {
 		b.remember(id, data)
 	}
 
-	drawn, err := b.app.art.Draw(data, artCols, artRows)
+	drawn, err := b.app.art.Draw(data, cols, rows)
 	if err != nil {
 		drawn = ""
 	}
@@ -685,10 +682,9 @@ func (b *browser) remember(id string, data []byte) {
 
 func (b *browser) draw() error {
 	width, height := b.screen.Size()
-	art := b.picture(context.Background())
+	cols, rows := tui.ArtBox(width, height)
 	return b.screen.Draw(tui.Render(tui.Dashboard{
-		Art:         art,
-		ArtRows:     artRows,
+		Art:         b.picture(context.Background(), cols, rows),
 		Rows:        b.rows,
 		Failed:      b.failedNow(),
 		Reached:     len(b.fetched),

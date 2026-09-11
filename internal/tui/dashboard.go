@@ -65,10 +65,9 @@ type Dashboard struct {
 	Line   string
 	Typing bool
 	// Art is the picture for the row under the cursor, already turned into
-	// what the terminal draws, and the rows it occupies. Built elsewhere: an
-	// escape sequence carrying a picture is text like any other.
-	Art     string
-	ArtRows int
+	// what the terminal draws — sized by ArtBox of this frame's own width and
+	// height, so it fits the window it is in.
+	Art string
 	// Interactive draws the cursor, the frame and the key hints. Without it
 	// the same model renders as a plain listing, which is what a pipe gets.
 	Interactive bool
@@ -111,6 +110,9 @@ func styled(attr, text string) string {
 	return attr + text + reset
 }
 
+// forward moves the cursor right without writing anything over what is there.
+func forward(cells int) string { return fmt.Sprintf("\x1b[%dC", cells) }
+
 // rule is the horizontal line above and below the list.
 func rule(width int) string { return strings.Repeat("─", width) }
 
@@ -148,13 +150,6 @@ func Render(d Dashboard) string {
 		visible = max(1, height-chrome(d, width))
 	}
 
-	if rows := d.artRows(visible); rows > 0 {
-		b.WriteString(d.Art)
-		// The picture is drawn where the cursor sits and does not move it, so
-		// the rows it covers are stepped over by hand.
-		b.WriteString(strings.Repeat("\n", rows))
-		visible -= rows
-	}
 	b.WriteString(list(d, width, visible))
 
 	b.WriteString(styled(faint, rule(width)))
@@ -181,21 +176,40 @@ func chrome(d Dashboard, width int) int {
 	return n
 }
 
-// minRowsBesideArt is how much list has to remain for a picture to be worth
-// its rows. One row and a thumbnail is a thumbnail of something nobody can
-// scroll away from.
-const minRowsBesideArt = 4
+// ArtBox is the picture's size in cells for a window of this size, and zero
+// where there is no room worth the space. A quarter of the width, bounded: one
+// that grows without limit takes the screen from what it illustrates, and one
+// that never grows is a stamp on a large display.
+func ArtBox(width, height int) (cols, rows int) {
+	if width < minWidth+minList || height < minHeight {
+		return 0, 0
+	}
 
-// artRows is how many rows the picture gets, which is none when there is not
-// enough screen to spare them.
-func (d Dashboard) artRows(visible int) int {
-	if d.Art == "" || d.ArtRows <= 0 {
-		return 0
+	cols = width / 4
+	cols = min(max(cols, minArtCols), maxArtCols)
+	rows = cols * 9 / 16 / 2
+
+	if rows < 3 || height-chromeLines-rows < 2 {
+		return 0, 0
 	}
-	if visible-d.ArtRows < minRowsBesideArt {
-		return 0
+	return cols, rows
+}
+
+const (
+	minArtCols = 16
+	maxArtCols = 34
+	// minList is how much has to be left for the titles beside the picture.
+	minList = 30
+	// minHeight is the shortest window a picture is worth drawing in.
+	minHeight = 14
+)
+
+// artPane is the picture's size for this frame, or zero when it has none.
+func (d Dashboard) artPane() (cols, rows int) {
+	if d.Art == "" || !d.Interactive {
+		return 0, 0
 	}
-	return d.ArtRows
+	return ArtBox(d.Width, d.Height)
 }
 
 // heading is what this screen is, after the program's name.
@@ -223,8 +237,16 @@ func heading(d Dashboard) string {
 	}
 }
 
-// list is the rows, padded to fill the space between the rules.
+// list is the rows, padded to fill the space between the rules. Every row is
+// indented past the picture's pane, including those below it, so the titles
+// form one column rather than stepping left half way down.
 func list(d Dashboard, width, visible int) string {
+	artCols, artRows := d.artPane()
+	indent := 0
+	if artCols > 0 {
+		indent = artCols + 2
+	}
+
 	if len(d.Rows) == 0 {
 		return empty(d, width, visible)
 	}
@@ -233,18 +255,33 @@ func list(d Dashboard, width, visible int) string {
 
 	var b strings.Builder
 	for i := first; i < last; i++ {
+		var line string
+		if artCols > 0 && i-first == 0 {
+			// Placed where the cursor already is, without moving it.
+			line = d.Art
+		}
+
 		cursor := " "
 		if d.Interactive && i == d.Selected {
 			cursor = ">"
 		}
-		line := fit(cursor+" "+row(d, d.Rows[i], width-2), width)
+		text := fit(cursor+" "+row(d, d.Rows[i], width-indent-2), width-indent)
 		if d.Interactive && i == d.Selected {
-			line = styled(reverse, line)
+			text = styled(reverse, text)
 		}
-		b.WriteString(line)
+		if indent > 0 {
+			// Stepped over rather than written across, so whether text over a
+			// picture hides it never has to be answered.
+			text = forward(indent) + text
+		}
+
+		b.WriteString(line + text)
 		b.WriteString("\n")
 	}
-	for range max(0, visible-(last-first)) {
+
+	drawn := last - first
+	// The pane may outlast the list, and the rules sit below both.
+	for range max(0, max(visible-drawn, artRows-drawn)) {
 		b.WriteString("\n")
 	}
 	return b.String()
