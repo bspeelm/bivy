@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/bspeelm/bivy/internal/media"
+	"github.com/bspeelm/bivy/internal/visitor"
 )
 
 // Minimum is the oldest mpv bivy drives: --input-ipc-server arrived in 0.17.0
@@ -151,7 +152,13 @@ func Start(ctx context.Context, opt Options) (*Player, error) {
 			socket, len(socket), maxSocketPath)
 	}
 
-	args := append(append([]string(nil), opt.Args...), flags(socket)...)
+	cookies, err := visitor.Write(dir)
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, err
+	}
+
+	args := append(append([]string(nil), opt.Args...), flags(socket, cookies)...)
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = opt.Env
 	// Streams left nil, which exec connects to the null device: mpv's own
@@ -207,7 +214,7 @@ func Start(ctx context.Context, opt Options) (*Player, error) {
 // sitting there for the whole session, including after every video ends. On a
 // compositor that offers no decorations it has no title bar to close it by
 // either, so it is a pane the user cannot get rid of and did not ask for.
-func flags(socket string) []string {
+func flags(socket, cookies string) []string {
 	return []string{
 		// ADR-006: the user's own mpv setup is neither read nor written.
 		"--no-config",
@@ -222,6 +229,8 @@ func flags(socket string) []string {
 		// bivy owns the terminal, and mpv writing status lines into the
 		// screen bivy is drawing is the most visible way this goes wrong.
 		"--terminal=no",
+		// One invented visitor, replaced before every video (ADR-016).
+		"--ytdl-raw-options=cookies=" + cookies,
 	}
 }
 
@@ -268,6 +277,13 @@ func (p *Player) Play(v media.Video) error {
 	if !media.IsVideoID(v.ID) {
 		return fmt.Errorf("%q is not a video identifier", v.ID)
 	}
+
+	// Before the load, not after: what the service writes back has to outlast
+	// the playback that needs it, and the next video discards it (ADR-016).
+	if _, err := visitor.Write(p.dir); err != nil {
+		return err
+	}
+
 	_, err := p.command("loadfile", v.URL(), "replace")
 	return err
 }

@@ -7,7 +7,9 @@
 Follow channels. Launch and see what is new. Search when you want something
 specific. Press enter and watch it in mpv.
 
-bivy does not download, does not log in, and reads no cookies. One package in
+bivy does not download, does not log in, and holds no account. The one cookie
+it sends is a visitor identifier it invents per request and throws away
+(ADR-016). One package in
 the whole program touches the network, and it has one dependency in total,
 which is what makes that a claim you can check rather than one you have to
 take.

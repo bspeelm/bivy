@@ -593,3 +593,79 @@ afternoon and a red run that has been red for a week.
 **What would reopen this:** a runner on an address the service does not
 challenge, which is a property of where CI runs rather than of what bivy does.
 Nothing about the program has to change for this to become possible again.
+
+---
+
+## ADR-016 — bivy invents a visitor identifier for every request and keeps nothing the service sends back
+
+**Status:** accepted. This amends the surface of ADR-004 without weakening the
+refusal in it.
+
+ADR-004 says bivy never authenticates and reads no browser cookies. That still
+holds exactly. What changes is that bivy now sends one cookie of its own
+making, which the documentation previously ruled out in those words.
+
+### What prompted it
+
+The service began refusing an extractor that carried no visitor cookie, with
+the message "Sign in to confirm you're not a bot". The message is misleading.
+Measured with four interleaved trials of each condition against a video that
+was being refused:
+
+| what was sent | what happened |
+|---|---|
+| no cookies | refused, every time |
+| an empty cookie jar | refused, every time |
+| a fabricated `SID`, which is the account cookie | refused, every time |
+| a random `VISITOR_INFO1_LIVE` | resolved, every time |
+
+An account does not satisfy it and a made-up visitor does. So what is being
+demanded is a handle to count requests by, not a person to identify as — and
+the thing bivy refuses to have is not the thing being asked for.
+
+### The argument against
+
+bivy's documentation says "reads no cookies" in eight places and the claim is
+load-bearing: it is most of why the privacy story is checkable rather than
+promised. Sending one spends some of that, and the distinction between reading
+a browser's cookie and inventing your own is exactly the kind of distinction a
+reader in a hurry will not make.
+
+Worse, a cookie is where this sort of thing starts. The next refusal will have
+its own remedy, and the argument that worked here — "it is only an identifier,
+not an account" — is available for arguments that should not win.
+
+### What survives it
+
+The line is the account, and it is a line that can be tested rather than
+asserted: a fabricated account cookie was sent and refused. What bivy sends
+carries no name, no session, and nothing derived from the machine it runs on.
+
+The value is invented per request and thrown away after it, and whatever the
+service writes into the jar goes with it. That matters more than it sounds.
+Left alone, a jar accumulates: within seconds of the first request the service
+had added `__Secure-YNID`, 348 opaque characters with a six-month expiry that
+only the service can read. A file that started as a random number with nothing
+in it becomes a durable pseudonymous identity that a viewing history accrues
+to. Rotation is what prevents that, and it is why this is not simply "bivy uses
+a cookie now".
+
+So `internal/visitor` writes one, `internal/mpv` replaces it before every video,
+and `internal/ytdlp` writes a fresh one for every search. Neither outlives the
+request: the player's jar lives beside the socket and goes with it, and the
+extractor's directory is removed when the search returns.
+
+### What it costs, said plainly
+
+A new visitor on every request looks more like a bot than a returning one does,
+which is the behaviour the check is watching for. This trades a higher chance
+of being challenged for not accumulating a history, deliberately.
+
+And it is a workaround around someone else's anti-bot measure. They get a vote,
+and they can take it away. When they do, bivy already reports what the service
+said rather than "loading failed".
+
+**What would reopen this:** the service accepting requests with no cookie at
+all, which makes this dead code and it should go. Or the reverse — a demand
+that cannot be met without an account, which is ADR-004's territory and is
+answered there, not here.

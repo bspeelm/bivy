@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bspeelm/bivy/internal/media"
+	"github.com/bspeelm/bivy/internal/visitor"
 )
 
 // The tests run against a stand-in that speaks mpv's IPC protocol, not against
@@ -312,7 +313,7 @@ func TestPlayRefusesAVideoThatIsNotOne(t *testing.T) {
 
 // The socket carries what the user is watching, and argv is world-readable.
 func TestNothingUserControlledReachesTheArgv(t *testing.T) {
-	args := flags("/run/somewhere/mpv.sock")
+	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/cookies.txt")
 
 	for _, a := range args {
 		if !strings.HasPrefix(a, "--") {
@@ -338,7 +339,7 @@ func TestNothingUserControlledReachesTheArgv(t *testing.T) {
 // desktop before this test existed — and on a compositor that offers no
 // decorations they have no title bar to close them by.
 func TestAnIdlePlayerPutsNoWindowUp(t *testing.T) {
-	if contains(flags("/run/somewhere/mpv.sock"), "--force-window") {
+	if contains(flags("/run/somewhere/mpv.sock", "/run/somewhere/cookies.txt"), "--force-window") {
 		t.Error("bivy forces a window, which means an empty one whenever nothing is playing")
 	}
 }
@@ -621,5 +622,109 @@ func TestTheCauseOutranksTheCategoryAndTheConsequences(t *testing.T) {
 		case <-deadline:
 			t.Fatal("no end-file arrived")
 		}
+	}
+}
+
+// jarValue is the visitor identifier currently in a player's jar.
+func jarValue(t *testing.T, p *Player) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(p.dir, visitor.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.Contains(line, "VISITOR_INFO1_LIVE") {
+			fields := strings.Split(line, "\t")
+			return fields[len(fields)-1]
+		}
+	}
+	t.Fatalf("no visitor identifier in %q", b)
+	return ""
+}
+
+// One mpv serves a whole session, so the jar is the only thing that can change
+// between videos. If it did not, every video in a session would be the same
+// stranger and the session itself would be the identifier (ADR-016).
+func TestEachVideoIsANewVisitor(t *testing.T) {
+	p := start(t, "play-to-the-end")
+
+	if err := p.Play(aVideo()); err != nil {
+		t.Fatal(err)
+	}
+	first := jarValue(t, p)
+
+	if err := p.Play(aVideo()); err != nil {
+		t.Fatal(err)
+	}
+	if second := jarValue(t, p); second == first {
+		t.Errorf("both videos went out as %q", second)
+	}
+}
+
+// The service writes its own cookies into the jar while a video resolves --
+// including one that lasts six months. Keeping them would turn a per-video
+// identifier into a durable one within a single session.
+func TestWhatTheServiceSentDoesNotOutliveTheVideo(t *testing.T) {
+	p := start(t, "play-to-the-end")
+	if err := p.Play(aVideo()); err != nil {
+		t.Fatal(err)
+	}
+
+	jar := filepath.Join(p.dir, visitor.FileName)
+	b, err := os.ReadFile(jar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	returned := string(b) + ".youtube.com\tTRUE\t/\tTRUE\t1804822338\t__Secure-YNID\t21.YT=opaque\n"
+	if err := os.WriteFile(jar, []byte(returned), visitor.Perm); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.Play(aVideo()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(jar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(after), "__Secure-YNID") {
+		t.Errorf("the service's own cookie survived into the next video: %q", after)
+	}
+}
+
+// The jar is the one thing bivy writes that could recognise a session, so it
+// goes when the session does -- which it gets for free by living beside the
+// socket, and this is the test that notices if it stops.
+func TestTheJarGoesWithTheSocketDirectory(t *testing.T) {
+	p := start(t, "play-to-the-end")
+	jar := filepath.Join(p.dir, visitor.FileName)
+	if _, err := os.Stat(jar); err != nil {
+		t.Fatalf("no jar beside the socket: %v", err)
+	}
+
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(jar); !os.IsNotExist(err) {
+		t.Errorf("the jar outlived the session: %v", err)
+	}
+}
+
+// The cookie mpv is pointed at must be the one bivy owns and replaces, not a
+// path it inherited from somewhere.
+func TestTheCookieFlagPointsAtTheJarBivyWrote(t *testing.T) {
+	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName)
+
+	var found bool
+	for _, a := range args {
+		if strings.HasPrefix(a, "--ytdl-raw-options=cookies=") {
+			found = true
+			if !strings.HasSuffix(a, "/"+visitor.FileName) {
+				t.Errorf("%q does not point at the jar", a)
+			}
+		}
+	}
+	if !found {
+		t.Error("mpv is given no cookie, and the service refuses an extractor without one")
 	}
 }

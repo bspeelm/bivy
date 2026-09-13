@@ -3,6 +3,8 @@ package ytdlp
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -262,5 +264,95 @@ func TestUploadsParsesWhatAChannelListingGives(t *testing.T) {
 	}
 	if !videos[0].Published.IsZero() {
 		t.Error("a publish time was invented")
+	}
+}
+
+// standInExtractor is a script that reports its own argv and whether the
+// cookie it was handed existed when it ran.
+func standInExtractor(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stand-in")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\"\n" +
+		"while [ $# -gt 0 ]; do\n" +
+		"  if [ \"$1\" = \"--cookies\" ]; then\n" +
+		"    [ -f \"$2\" ] && printf 'JAR EXISTS\\n' && cat \"$2\"\n" +
+		"  fi\n" +
+		"  shift\n" +
+		"done\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// Search goes through the extractor too, and an identity that persisted across
+// searches would be the durable handle ADR-016 exists to avoid -- in the half
+// of the program nobody was looking at.
+func TestEverySearchIsANewVisitor(t *testing.T) {
+	c := &Client{Binary: standInExtractor(t)}
+
+	var ids []string
+	for i := 0; i < 2; i++ {
+		out, err := c.run(context.Background(), "--", "ytsearch1:anything")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(out, "--cookies") {
+			t.Fatalf("the extractor was given no cookie: %q", out)
+		}
+		if !strings.Contains(out, "JAR EXISTS") {
+			t.Fatal("the cookie file did not exist while the extractor ran")
+		}
+		if !strings.Contains(out, "VISITOR_INFO1_LIVE") {
+			t.Errorf("the jar holds no visitor identifier: %q", out)
+		}
+		for _, account := range []string{"SAPISID", "LOGIN_INFO"} {
+			if strings.Contains(out, account) {
+				t.Errorf("the jar carries %s, which is an account (ADR-004)", account)
+			}
+		}
+
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "VISITOR_INFO1_LIVE") {
+				fields := strings.Split(line, "\t")
+				ids = append(ids, fields[len(fields)-1])
+			}
+		}
+	}
+
+	if len(ids) != 2 {
+		t.Fatalf("read %d identifiers, want 2", len(ids))
+	}
+	if ids[0] == ids[1] {
+		t.Errorf("both searches went out as %q", ids[0])
+	}
+}
+
+// The jar is written outside the two directories §8 allows, so it has to go
+// when the search does -- including when the search fails, which is the path
+// that forgets.
+func TestASearchLeavesNoJarBehind(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+
+	for _, c := range []*Client{
+		{Binary: standInExtractor(t)},
+		{Binary: "no-such-extractor-anywhere"},
+	} {
+		_, _ = c.run(context.Background(), "--", "ytsearch1:anything")
+	}
+
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "bivy-") {
+			t.Errorf("a search left %s behind in the temporary directory", e.Name())
+		}
 	}
 }
