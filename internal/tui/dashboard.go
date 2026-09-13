@@ -105,10 +105,10 @@ const (
 )
 
 const (
-	keyHints     = "↑↓ move · enter play · / search · : commands · r refresh · :q quit"
-	resultHints  = "↑↓ move · enter play · f follow · m more · esc back · :q quit"
-	channelHints = "↑↓ move · enter open · f follow · m more · esc back · :q quit"
-	viewingHints = "↑↓ move · enter play · f follow · m more · esc back · :q quit"
+	keyHints     = "↑↓ move · enter play · m mark · / search · : commands · r refresh · :q quit"
+	resultHints  = "↑↓ move · enter play · f follow · m mark · M more · esc back · :q quit"
+	channelHints = "↑↓ move · enter open · f follow · M more · esc back · :q quit"
+	viewingHints = "↑↓ move · enter play · f follow · m mark · M more · esc back · :q quit"
 	emptyHints   = "/ search · : commands · r refresh · :q quit"
 	noResults    = "/ search again · esc back · :q quit"
 )

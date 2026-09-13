@@ -107,7 +107,8 @@ Once bivy is open, most of it is keys rather than commands:
     enter                   play the row in mpv
     /                       search
     f                       follow the channel this row came from
-    m                       load thirty more
+    m                       mark the row watched, or unmark it
+    M                       load thirty more
     esc                     back to the dashboard
     r                       refresh
     :q                      quit
