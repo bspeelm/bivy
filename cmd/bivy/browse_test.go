@@ -1931,3 +1931,108 @@ func TestMarkingAChannelRowSaysWhichKeyItWanted(t *testing.T) {
 	b.eventually(t, "channels are followed, not watched")
 	b.quit(t)
 }
+
+// Hiding what you have seen is what makes a dashboard a list of what is left
+// rather than a list of everything.
+func TestHidingWatchedVideos(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.eventually(t, "An older thing")
+
+	// Mark the top row, then hide.
+	b.screen.press(key('m'))
+	b.eventually(t, "marked watched · The newest thing")
+
+	b.screen.press(key(':'))
+	b.screen.typed("watched")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "hiding 1 watched")
+
+	if got := b.screen.last(); strings.Contains(got, "The newest thing") {
+		t.Error("a watched video is still listed while watched videos are hidden")
+	}
+	b.eventually(t, "An older thing")
+	b.quit(t)
+}
+
+// Anything hidden has to be reachable again, from the same command, or the
+// list has quietly lost rows with no way back.
+func TestShowingWatchedVideosAgain(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(key('m'))
+	b.eventually(t, "marked watched")
+
+	b.screen.press(key(':'))
+	b.screen.typed("watched")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "hiding 1 watched")
+
+	b.screen.press(key(':'))
+	b.screen.typed("watched")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "showing every video")
+	b.eventually(t, "The newest thing")
+	b.quit(t)
+}
+
+// Marking while hiding: the row goes, because the filter is a property of the
+// list rather than of the moment it was last built.
+func TestMarkingWhileHidingRemovesTheRow(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+
+	b.screen.press(key(':'))
+	b.screen.typed("watched")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "hiding watched videos · nothing here is watched yet")
+
+	b.screen.press(key('m'))
+	b.eventually(t, "marked watched · The newest thing")
+
+	// Once, on the status line that just announced it — and not a second time
+	// as a row, which is what hiding it means.
+	if got := strings.Count(b.screen.last(), "The newest thing"); got != 1 {
+		t.Errorf("the title appears %d times; want 1, the status line only", got)
+	}
+	b.eventually(t, "An older thing")
+	b.quit(t)
+}
+
+// Every screen's rows go through one place, so the filter cannot be on for the
+// dashboard and off for a search.
+func TestHidingAppliesToSearchResultsToo(t *testing.T) {
+	b := newBrowser(t)
+
+	b.start(t)
+	b.eventually(t, "nothing followed yet")
+
+	b.screen.press(key('/'))
+	b.screen.typed("anything")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "A Search Result")
+	b.eventually(t, "Another Result")
+
+	b.screen.press(key('m'))
+	b.eventually(t, "marked watched · A Search Result")
+
+	b.screen.press(key(':'))
+	b.screen.typed("watched")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "hiding 1 watched")
+
+	if got := b.screen.last(); strings.Contains(got, "A Search Result") {
+		t.Error("a watched search result is still listed while watched videos are hidden")
+	}
+	b.eventually(t, "Another Result")
+	b.quit(t)
+}

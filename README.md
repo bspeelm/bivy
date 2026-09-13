@@ -67,11 +67,16 @@ everything there is:
 ```
 :_
 
-  search <words>   channels <words>   follow <channel>
-  unfollow <channel>   refresh   help   quit
+  search <words>   channels <words>   open <channel>   follow <channel>
+  unfollow <channel>   refresh   watched   help   quit
 ```
 
 `/` is the same line with `search ` already in it.
+
+`:watched` hides the videos you have watched, so the list is what is left
+rather than everything. The same command shows them again, and it lasts for
+the session — a list that came back filtered on the next launch, with nothing
+on screen saying why, is a bug report about missing videos.
 
 `:channels <words>` finds channels rather than videos, and **`f` follows the
 one under the cursor**:

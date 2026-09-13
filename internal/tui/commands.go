@@ -25,6 +25,8 @@ type (
 	Unfollow struct{ Target string }
 	// Refresh fetches the followed feeds again.
 	Refresh struct{}
+	// HideWatched hides the videos already watched, or brings them back.
+	HideWatched struct{}
 	// ShowHelp lists the commands.
 	ShowHelp struct{}
 	// Quit ends the session.
@@ -105,6 +107,11 @@ var Commands = []Command{
 		Name:    "refresh",
 		Summary: "fetch the feeds again",
 		run:     func(string) (Intent, error) { return Refresh{}, nil },
+	},
+	{
+		Name:    "watched",
+		Summary: "hide the videos you have watched, or show them again",
+		run:     func(string) (Intent, error) { return HideWatched{}, nil },
 	},
 	{
 		Name:    "help",
