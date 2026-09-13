@@ -189,8 +189,9 @@ func (b *browser) run(ctx context.Context) int {
 
 		case e, open := <-events:
 			if !open {
-				// mpv is gone. The next play starts a new one rather than
-				// talking to a socket nobody is listening on.
+				// mpv is gone. Closed rather than dropped, because the socket
+				// directory is bivy's to remove and this mpv never asked to go.
+				_ = b.player.Close()
 				b.player, events = nil, nil
 				continue
 			}
