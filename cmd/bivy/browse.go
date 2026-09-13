@@ -79,8 +79,12 @@ type browser struct {
 
 	state   follow.State
 	fetched []media.Channel
-	rows    []follow.Row
-	failed  []string
+	// all is every row this screen has and rows is what is on it. They differ
+	// only while watched videos are hidden.
+	all         []follow.Row
+	rows        []follow.Row
+	hideWatched bool
+	failed      []string
 	// stale means some channels came from the extractor because their feed
 	// would not answer, so those rows carry no publish times.
 	stale    bool
@@ -323,6 +327,8 @@ func (b *browser) act(ctx context.Context, intent tui.Intent) (done bool) {
 		b.status = "keys: ↑↓ move · enter play · / search · : commands · esc back · q quit"
 	case tui.Refresh:
 		b.refresh(ctx)
+	case tui.HideWatched:
+		b.toggleWatched()
 	case tui.Search:
 		b.runSearch(ctx, v.Query)
 	case tui.Channels:
@@ -415,11 +421,12 @@ func (b *browser) add(ctx context.Context, id, title string) {
 	if b.channels {
 		// Stay on the list. Following one channel out of a search is rarely
 		// the last thing anyone does with that search.
-		for i := range b.rows {
-			if b.rows[i].ChannelID == id {
-				b.rows[i].Followed = true
+		for i := range b.all {
+			if b.all[i].ChannelID == id {
+				b.all[i].Followed = true
 			}
 		}
+		b.reshow()
 		return
 	}
 	b.reload(ctx)
@@ -457,7 +464,7 @@ func (b *browser) unfollow(target string) {
 
 	b.state = next
 	b.status = "unfollowed " + name(channel.Title, id)
-	b.rows = follow.Dashboard(b.state, b.fetched, dashboardRows)
+	b.show(follow.Dashboard(b.state, b.fetched, dashboardRows))
 	b.selected = tui.Move(b.selected, 0, len(b.rows))
 }
 
@@ -480,7 +487,7 @@ func (b *browser) reload(ctx context.Context) {
 		b.fetched, b.failed, b.stale = fetched, failed, stale
 	}
 	b.query, b.channels, b.viewing, b.back = "", false, "", nil
-	b.rows = follow.Dashboard(b.state, b.fetched, dashboardRows)
+	b.show(follow.Dashboard(b.state, b.fetched, dashboardRows))
 	b.selected = tui.Move(b.selected, 0, len(b.rows))
 }
 
@@ -503,7 +510,8 @@ func (b *browser) followRow(ctx context.Context) {
 func (b *browser) runChannelSearch(ctx context.Context, query string) {
 	b.push()
 	b.query, b.channels, b.viewing = query, true, ""
-	b.rows, b.selected, b.busy = nil, 0, true
+	b.show(nil)
+	b.selected, b.busy = 0, true
 	b.status = ""
 	_ = b.draw()
 
@@ -514,7 +522,7 @@ func (b *browser) runChannelSearch(ctx context.Context, query string) {
 		return
 	}
 
-	b.rows = follow.ChannelResults(b.state, found)
+	b.show(follow.ChannelResults(b.state, found))
 	b.more = func(ctx context.Context, from int) ([]follow.Row, error) {
 		next, err := b.app.search.Channels(ctx, query, from+pageSize)
 		if err != nil {
@@ -526,7 +534,7 @@ func (b *browser) runChannelSearch(ctx context.Context, query string) {
 
 // view is one screen, kept so that escape can put it back.
 type view struct {
-	rows     []follow.Row
+	all      []follow.Row
 	query    string
 	channels bool
 	viewing  string
@@ -536,7 +544,7 @@ type view struct {
 // push remembers the screen being left.
 func (b *browser) push() {
 	b.back = append(b.back, view{
-		rows:     b.rows,
+		all:      b.all,
 		query:    b.query,
 		channels: b.channels,
 		viewing:  b.viewing,
@@ -552,7 +560,8 @@ func (b *browser) pop() bool {
 	last := b.back[len(b.back)-1]
 	b.back = b.back[:len(b.back)-1]
 
-	b.rows, b.query, b.channels, b.viewing = last.rows, last.query, last.channels, last.viewing
+	b.query, b.channels, b.viewing = last.query, last.channels, last.viewing
+	b.show(last.all)
 	b.selected = tui.Move(last.selected, 0, len(b.rows))
 	b.status = ""
 	return true
@@ -605,7 +614,8 @@ func (b *browser) open(ctx context.Context, id, title string) {
 	}
 
 	b.push()
-	b.rows, b.selected, b.query, b.channels = nil, 0, "", false
+	b.show(nil)
+	b.selected, b.query, b.channels = 0, "", false
 	b.viewing, b.busy, b.status = title, true, ""
 	_ = b.draw()
 
@@ -624,7 +634,7 @@ func (b *browser) open(ctx context.Context, id, title string) {
 	}
 
 	b.status = ""
-	b.rows = b.channelRows(id, ch.Videos)
+	b.show(b.channelRows(id, ch.Videos))
 	b.more = func(ctx context.Context, from int) ([]follow.Row, error) {
 		// A feed carries what it carries; only the extractor pages.
 		if b.app.search == nil {
@@ -654,7 +664,8 @@ func (b *browser) channelRows(id string, videos []media.Video) []follow.Row {
 func (b *browser) runSearch(ctx context.Context, query string) {
 	b.push()
 	b.query, b.channels, b.viewing = query, false, ""
-	b.rows, b.selected, b.busy = nil, 0, true
+	b.show(nil)
+	b.selected, b.busy = 0, true
 	b.status = ""
 	_ = b.draw()
 
@@ -665,7 +676,7 @@ func (b *browser) runSearch(ctx context.Context, query string) {
 		return
 	}
 
-	b.rows = follow.Results(b.state, results)
+	b.show(follow.Results(b.state, results))
 	b.more = func(ctx context.Context, from int) ([]follow.Row, error) {
 		found, err := b.app.search.Search(ctx, query, from+pageSize)
 		if err != nil {
@@ -697,7 +708,7 @@ func (b *browser) loadMore(ctx context.Context) {
 		return
 	}
 
-	was := len(b.rows)
+	was := len(b.all)
 	b.busy, b.status = true, ""
 	_ = b.draw()
 
@@ -711,7 +722,7 @@ func (b *browser) loadMore(ctx context.Context) {
 	added := 0
 	for _, r := range rows {
 		if !b.showing(r) {
-			b.rows = append(b.rows, r)
+			b.all = append(b.all, r)
 			added++
 		}
 	}
@@ -720,13 +731,14 @@ func (b *browser) loadMore(ctx context.Context) {
 		b.status = "that is all of it"
 		return
 	}
+	b.reshow()
 	b.status = fmt.Sprintf("%d more", added)
 }
 
 // showing reports whether a row is already on screen, so a page that overlaps
 // the one before it does not double anything up.
 func (b *browser) showing(r follow.Row) bool {
-	for _, have := range b.rows {
+	for _, have := range b.all {
 		if r.IsChannel() {
 			if have.ChannelID == r.ChannelID {
 				return true
@@ -809,7 +821,7 @@ func (b *browser) report(e mpv.Event) {
 	if err := b.app.store.WriteJSON(stateFile, b.state); err != nil {
 		b.status = "could not record that as watched: " + err.Error()
 	}
-	b.rows = follow.Dashboard(b.state, b.fetched, dashboardRows)
+	b.show(follow.Dashboard(b.state, b.fetched, dashboardRows))
 	b.playing = media.Video{}
 }
 
@@ -835,7 +847,12 @@ func (b *browser) markRow() {
 	} else {
 		b.state = follow.Unwatch(b.state, r.Video.ID)
 	}
-	b.rows[b.selected].Watched = watched
+	for i := range b.all {
+		if b.all[i].Video.ID == r.Video.ID {
+			b.all[i].Watched = watched
+		}
+	}
+	b.reshow()
 
 	if err := b.app.store.WriteJSON(stateFile, b.state); err != nil {
 		b.status = "could not record that: " + err.Error()
@@ -846,6 +863,54 @@ func (b *browser) markRow() {
 		return
 	}
 	b.status = "no longer watched · " + r.Video.Title
+}
+
+// toggleWatched hides what has been watched, or brings it back. For this
+// session only: a list that came back filtered on the next launch, with
+// nothing on screen saying why, is a bug report about missing videos.
+func (b *browser) toggleWatched() {
+	b.hideWatched = !b.hideWatched
+	b.reshow()
+
+	if !b.hideWatched {
+		b.status = "showing every video"
+		return
+	}
+	if hidden := len(b.all) - len(b.rows); hidden > 0 {
+		b.status = fmt.Sprintf("hiding %d watched · :watched shows them again", hidden)
+		return
+	}
+	b.status = "hiding watched videos · nothing here is watched yet"
+}
+
+// show puts rows on screen. Every screen's rows arrive through here, so the
+// filter cannot be on for one list and off for the next.
+func (b *browser) show(rows []follow.Row) {
+	b.all = rows
+	b.rows = visible(rows, b.hideWatched)
+}
+
+// reshow rebuilds the list from rows the screen already had, after the filter
+// or a row's own state changed under it.
+func (b *browser) reshow() {
+	b.rows = visible(b.all, b.hideWatched)
+	b.selected = tui.Move(b.selected, 0, len(b.rows))
+}
+
+// visible drops watched videos when they are hidden. Channels keep their
+// place: their tick means followed, which is not something to hide.
+func visible(rows []follow.Row, hide bool) []follow.Row {
+	if !hide {
+		return rows
+	}
+	out := make([]follow.Row, 0, len(rows))
+	for _, r := range rows {
+		if r.Watched && !r.IsChannel() {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // load fetches every followed channel and rebuilds the list.
@@ -866,7 +931,7 @@ func (b *browser) load(ctx context.Context) error {
 	b.state, b.fetched, b.failed, b.stale = state, fetched, failed, stale
 	b.back = nil
 	b.query, b.channels, b.viewing = "", false, ""
-	b.rows = follow.Dashboard(state, fetched, dashboardRows)
+	b.show(follow.Dashboard(state, fetched, dashboardRows))
 	b.selected = tui.Move(b.selected, 0, len(b.rows))
 	// The dashboard shows everything the feeds carried, so there is no next
 	// page of it to ask for.

@@ -122,7 +122,7 @@ func TestMatching(t *testing.T) {
 // when that stops being true.
 func TestEveryCommandEarnsItsPlace(t *testing.T) {
 	// The rare ones: no argument, and not something anyone does repeatedly.
-	rare := map[string]bool{"help": true, "quit": true, "refresh": true}
+	rare := map[string]bool{"help": true, "quit": true, "refresh": true, "watched": true}
 
 	for _, c := range Commands {
 		if c.Argument == "" && !rare[c.Name] {
