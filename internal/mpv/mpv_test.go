@@ -124,6 +124,24 @@ func TestStandInProcess(t *testing.T) {
 			if behaviour == "stopped-early" {
 				_ = encoder.Encode(map[string]any{"event": "end-file", "reason": "quit"})
 			}
+			if behaviour == "refused-by-the-service" {
+				// A real refusal, in the order a real one arrives: the cause,
+				// then two consequences, then a file_error that names a
+				// category rather than a reason.
+				for _, line := range []string{
+					"ERROR: [youtube] aaaaaaaaaaa: Sign in to confirm you're not a bot. Use --cookies for the authentication. See  https://example.invalid/faq  for how to pass cookies",
+					"youtube-dl failed: unexpected error occurred",
+					"Failed to open https://www.youtube.com/watch?v=aaaaaaaaaaa.",
+				} {
+					_ = encoder.Encode(map[string]any{
+						"event": "log-message", "prefix": "ytdl_hook",
+						"level": "error", "text": line + "\n",
+					})
+				}
+				_ = encoder.Encode(map[string]any{
+					"event": "end-file", "reason": "error", "file_error": "loading failed",
+				})
+			}
 			// A line that is not JSON at all, which must not end the
 			// conversation.
 			_, _ = conn.Write([]byte("this is not json\n"))
@@ -566,6 +584,42 @@ func waitFor(t *testing.T, p *Player, name string) bool {
 			}
 		case <-deadline:
 			return false
+		}
+	}
+}
+
+// One failure arrives as a cascade, and mpv's own file_error is the least
+// informative thing in it: "loading failed" is what it says whether the
+// service refused, the network went, or the file was never a video. The cause
+// is the first line, and the two after it are consequences of it.
+func TestTheCauseOutranksTheCategoryAndTheConsequences(t *testing.T) {
+	p := start(t, "refused-by-the-service")
+	if err := p.Play(aVideo()); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case e, open := <-p.Events():
+			if !open {
+				t.Fatal("the player went away without an end-file")
+			}
+			if e.Name != "end-file" {
+				continue
+			}
+			if e.Detail == "loading failed" {
+				t.Fatal("the file_error won, so the screen says nothing anyone can act on")
+			}
+			if strings.Contains(e.Detail, "Failed to open") {
+				t.Errorf("the last line of the cascade won: %q", e.Detail)
+			}
+			if !strings.Contains(e.Detail, "not a bot") {
+				t.Errorf("detail = %q, want the reason the service gave", e.Detail)
+			}
+			return
+		case <-deadline:
+			t.Fatal("no end-file arrived")
 		}
 	}
 }

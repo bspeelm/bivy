@@ -1048,7 +1048,30 @@ func playbackTrouble(e mpv.Event) string {
 	if e.Detail == "" {
 		return "could not play that — mpv could not open it"
 	}
-	return "could not play that — " + e.Detail
+	return "could not play that — " + tidy(e.Detail)
+}
+
+// tidy drops what the extractor writes for its own readers: the identifier of
+// the video it failed on, which is the row under the cursor, and the links to
+// its own documentation.
+func tidy(detail string) string {
+	if i := strings.Index(detail, " See "); i > 0 {
+		detail = detail[:i]
+	}
+	// mpv passes the extractor's line through with its level still on the
+	// front, which the status line has already implied by existing.
+	for _, level := range []string{"ERROR: ", "WARNING: "} {
+		detail = strings.TrimPrefix(detail, level)
+	}
+	if strings.HasPrefix(detail, "[") {
+		if i := strings.Index(detail, "] "); i > 0 {
+			rest := detail[i+2:]
+			if j := strings.Index(rest, ": "); j > 0 && !strings.Contains(rest[:j], " ") {
+				detail = rest[j+2:]
+			}
+		}
+	}
+	return strings.TrimSpace(detail)
 }
 
 // startMPV is the real player. The only place in bivy that launches one.
