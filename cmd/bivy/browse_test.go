@@ -2036,3 +2036,62 @@ func TestHidingAppliesToSearchResultsToo(t *testing.T) {
 	b.eventually(t, "Another Result")
 	b.quit(t)
 }
+
+// The message that actually reaches people: the service refusing the
+// extractor. It arrives wrapped in the extractor's own conventions — the video
+// it failed on, and two links to its documentation — none of which belongs on
+// a status line beside the row it failed for.
+func TestTheRefusalReachesTheScreenInWordsAnyoneCanRead(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "playing ·")
+
+	b.player.events <- mpv.Event{
+		Name:   "end-file",
+		Reason: "error",
+		Detail: "ERROR: [youtube] aaaaaaaaaaa: Sign in to confirm you're not a bot. " +
+			"Use --cookies for the authentication. See  https://example.invalid/faq  " +
+			"for how to pass cookies. Also see  https://example.invalid/tips  for tips",
+	}
+	b.eventually(t, "Sign in to confirm you're not a bot")
+	b.quit(t)
+
+	got := b.screen.last()
+	if strings.Contains(got, "https://") {
+		t.Error("the extractor's documentation links reached the status line")
+	}
+	if strings.Contains(got, "[youtube]") {
+		t.Error("the extractor's own prefix reached the status line")
+	}
+}
+
+func TestTidy(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"a bare message", "loading failed", "loading failed"},
+		{
+			"the extractor's prefix",
+			"ERROR: [youtube] aaaaaaaaaaa: Sign in to confirm you're not a bot.",
+			"Sign in to confirm you're not a bot.",
+		},
+		{
+			"its documentation",
+			"Something went wrong. See  https://example.invalid/faq  for more",
+			"Something went wrong.",
+		},
+		{
+			"a prefix that is not one",
+			"[stream] Failed to open a file with spaces: it went badly",
+			"[stream] Failed to open a file with spaces: it went badly",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tidy(tc.in); got != tc.want {
+				t.Errorf("tidy(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

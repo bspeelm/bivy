@@ -386,6 +386,9 @@ func (p *Player) read() {
 			p.remember(r)
 			continue
 		}
+		if r.Event == "start-file" {
+			p.forget()
+		}
 		if r.Event != "" {
 			select {
 			case p.events <- p.describe(r):
@@ -403,7 +406,8 @@ func (p *Player) read() {
 	}
 }
 
-// remember keeps mpv's most recent complaint.
+// remember keeps the first complaint of an attempt, not the last: a failure
+// arrives as a cascade, and every line after the first is a consequence of it.
 func (p *Player) remember(r reply) {
 	text := strings.TrimSpace(r.Text)
 	if text == "" {
@@ -411,7 +415,17 @@ func (p *Player) remember(r reply) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.trouble != "" {
+		return
+	}
 	p.trouble, p.troubleAt = text, time.Now()
+}
+
+// forget clears the last attempt's complaint, so a new one starts silent.
+func (p *Player) forget() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.trouble, p.troubleAt = "", time.Time{}
 }
 
 // describe turns a reply into an event, attaching what mpv complained about
@@ -422,10 +436,13 @@ func (p *Player) remember(r reply) {
 // error alongside tells them apart.
 func (p *Player) describe(r reply) Event {
 	e := Event{Name: r.Event, Reason: r.Reason, Detail: r.FileError}
-	if e.Name != "end-file" || e.Reason == "eof" || e.Detail != "" {
+	if e.Name != "end-file" || e.Reason == "eof" {
 		return e
 	}
 
+	// What mpv complained about outranks its file_error, which is a category
+	// rather than a reason: "loading failed" is what it says whether the
+	// service refused, the network went, or the file is not a video.
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.trouble != "" && time.Since(p.troubleAt) < troubleWindow {
