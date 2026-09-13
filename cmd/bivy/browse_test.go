@@ -581,6 +581,39 @@ func TestAPlayerThatDiesIsNotReusedAfterwards(t *testing.T) {
 	}
 }
 
+// An mpv that exits on its own leaves a socket directory behind, and removing
+// it is bivy's job rather than the dead process's. Closing a video by its own
+// window is the ordinary way to reach this, so the directories accumulate one
+// per dismissed video — and §8 says the write set is two directories.
+func TestAPlayerThatDiesIsClosedSoItsSocketDirectoryGoes(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	players := []*fakePlayer{newPlayer(), newPlayer()}
+	var starts int
+	b.app.newPlayer = func(context.Context) (player, error) {
+		p := players[starts]
+		starts++
+		return p, nil
+	}
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "playing ·")
+
+	close(players[0].events)
+	// Played again so the assertion runs after the loop has handled the close
+	// rather than racing it.
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "playing ·")
+	b.quit(t)
+
+	if !players[0].wasClosed() {
+		t.Error("the player that died was dropped without being closed, so its socket directory is still there")
+	}
+}
+
 // Saying nothing, which is what bivy did before this test existed, looks like
 // the keypress was ignored. The failure that actually happens is the extractor
 // being refused a stream: bivy holds no account and sends no cookie (ADR-004),
