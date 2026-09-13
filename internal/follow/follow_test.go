@@ -290,3 +290,34 @@ func TestTheFollowListKeepsAStableOrder(t *testing.T) {
 		t.Errorf("the list starts with %q, want it sorted by name", first.Channels[0].Title)
 	}
 }
+
+// A mark made by hand has to be removable by hand, or the checkmark is a trap:
+// one keystroke to set, nothing to undo.
+func TestUnwatchForgetsAVideo(t *testing.T) {
+	const id = "aaaaaaaaaaa"
+	now := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
+
+	state := MarkWatched(State{}, id, now)
+	if !state.HasWatched(id) {
+		t.Fatal("the fixture did not mark it watched")
+	}
+
+	after := Unwatch(state, id)
+	if after.HasWatched(id) {
+		t.Error("the video is still watched after Unwatch")
+	}
+	if state.HasWatched(id) != true {
+		t.Error("Unwatch changed the state it was given; these are values, not receivers")
+	}
+}
+
+// Unwatching something that was never watched is a keypress on the wrong row,
+// not an error worth a message.
+func TestUnwatchingWhatWasNotWatchedChangesNothing(t *testing.T) {
+	state := MarkWatched(State{}, "aaaaaaaaaaa", time.Now())
+
+	after := Unwatch(state, "bbbbbbbbbbb")
+	if len(after.Watched) != len(state.Watched) || !after.HasWatched("aaaaaaaaaaa") {
+		t.Errorf("Unwatch of an unwatched video changed the history: %v", after.Watched)
+	}
+}

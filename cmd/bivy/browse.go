@@ -256,6 +256,8 @@ func (b *browser) handleRune(ctx context.Context, r rune) (done bool) {
 	case 'f':
 		b.followRow(ctx)
 	case 'm':
+		b.markRow()
+	case 'M':
 		b.loadMore(ctx)
 	case '/':
 		// The one command common enough to deserve a key, opened with its
@@ -809,6 +811,41 @@ func (b *browser) report(e mpv.Event) {
 	}
 	b.rows = follow.Dashboard(b.state, b.fetched, dashboardRows)
 	b.playing = media.Video{}
+}
+
+// markRow toggles the tick on the row under the cursor.
+//
+// By hand, because bivy's own mark means "played to the end" and that is not
+// the only way to be done with something: a video watched elsewhere, or one
+// abandoned two minutes in on purpose, are both finished as far as the list is
+// concerned.
+func (b *browser) markRow() {
+	if b.selected >= len(b.rows) {
+		return
+	}
+	r := b.rows[b.selected]
+	if r.IsChannel() {
+		b.status = "channels are followed, not watched — f follows this one"
+		return
+	}
+
+	watched := !r.Watched
+	if watched {
+		b.state = follow.MarkWatched(b.state, r.Video.ID, b.app.now())
+	} else {
+		b.state = follow.Unwatch(b.state, r.Video.ID)
+	}
+	b.rows[b.selected].Watched = watched
+
+	if err := b.app.store.WriteJSON(stateFile, b.state); err != nil {
+		b.status = "could not record that: " + err.Error()
+		return
+	}
+	if watched {
+		b.status = "marked watched · " + r.Video.Title
+		return
+	}
+	b.status = "no longer watched · " + r.Video.Title
 }
 
 // load fetches every followed channel and rebuilds the list.

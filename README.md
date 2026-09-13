@@ -45,10 +45,11 @@ nothing playing
 ```
 
 Enter on a channel row opens it and lists its videos; `esc` goes back one
-screen. `m` loads thirty more of whatever you are looking at.
+screen. `M` loads thirty more of whatever you are looking at.
 
 A dot marks anything posted since you last looked and a tick anything you have
-watched. What is being chosen sits on the left; what is known about it is
+watched. bivy sets that tick when a video plays to its end, and `m` sets or
+clears it by hand — for something watched elsewhere, or put down on purpose. What is being chosen sits on the left; what is known about it is
 right-aligned, so the titles line up whatever the channel names are.
 
 A channel that cannot be reached is named under the list rather than quietly

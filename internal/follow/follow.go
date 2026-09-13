@@ -62,6 +62,21 @@ func MarkWatched(s State, videoID string, now time.Time) State {
 	return next
 }
 
+// Unwatch forgets that a video was watched. Deleted rather than recorded as
+// not-watched: absence from this map is what unwatched means everywhere else,
+// and a second spelling of it is a second thing to keep in agreement.
+func Unwatch(s State, videoID string) State {
+	if _, found := s.Watched[videoID]; !found {
+		return s
+	}
+
+	watched := make(map[string]time.Time, len(s.Watched))
+	maps.Copy(watched, s.Watched)
+	delete(watched, videoID)
+
+	return State{Channels: append([]Channel(nil), s.Channels...), Watched: watched}
+}
+
 // HasWatched reports whether a video has been watched to its end.
 func (s State) HasWatched(videoID string) bool {
 	_, ok := s.Watched[videoID]

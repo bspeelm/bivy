@@ -1731,7 +1731,7 @@ func TestLoadingMore(t *testing.T) {
 	b.eventually(t, "30 results")
 
 	b.finder.results = many
-	b.screen.press(key('m'))
+	b.screen.press(key('M'))
 	b.eventually(t, "30 more")
 	b.eventually(t, "60 results")
 	b.quit(t)
@@ -1762,7 +1762,7 @@ func TestLoadingMoreDoesNotDuplicate(t *testing.T) {
 	b.eventually(t, "30 results")
 
 	// The same page again: nothing new in it.
-	b.screen.press(key('m'))
+	b.screen.press(key('M'))
 	b.eventually(t, "that is all of it")
 	b.quit(t)
 
@@ -1781,7 +1781,7 @@ func TestTheDashboardHasNoNextPage(t *testing.T) {
 
 	b.start(t)
 	b.eventually(t, "The newest thing")
-	b.screen.press(key('m'))
+	b.screen.press(key('M'))
 	b.eventually(t, "nothing more to load here")
 	b.quit(t)
 }
@@ -1852,4 +1852,82 @@ func TestAChangedPictureIsSent(t *testing.T) {
 	if got := b.screen.pictureSends(); got < 2 {
 		t.Errorf("the picture was sent %d times across two rows", got)
 	}
+}
+
+// The tick bivy sets itself means "played to its end", and that is not the
+// only way to be done with a video. One watched elsewhere, or abandoned two
+// minutes in on purpose, is finished as far as the list is concerned.
+func TestMarkingARowWatchedByHand(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	br := b.start(t)
+	b.eventually(t, "The newest thing")
+	if strings.Contains(b.screen.last(), "✓") {
+		t.Fatal("the fixture already has something marked, so this proves nothing")
+	}
+
+	b.screen.press(key('m'))
+	b.eventually(t, "marked watched · The newest thing")
+	b.eventually(t, "✓")
+	b.quit(t)
+
+	if !br.state.HasWatched("aaaaaaaaaaa") {
+		t.Error("the mark never reached the state")
+	}
+
+	var saved follow.State
+	if err := b.store.ReadJSON(stateFile, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if !saved.HasWatched("aaaaaaaaaaa") {
+		t.Error("the mark was not written, so the next launch forgets it")
+	}
+}
+
+// One keystroke to set and nothing to undo is a trap. The same key takes it
+// back, and the status line says which way it went.
+func TestMarkingTwiceTakesTheMarkBack(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	br := b.start(t)
+	b.eventually(t, "The newest thing")
+
+	b.screen.press(key('m'))
+	b.eventually(t, "marked watched · The newest thing")
+	b.screen.press(key('m'))
+	b.eventually(t, "no longer watched · The newest thing")
+	b.quit(t)
+
+	if br.state.HasWatched("aaaaaaaaaaa") {
+		t.Error("the video is still watched after being unmarked")
+	}
+
+	var saved follow.State
+	if err := b.store.ReadJSON(stateFile, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.HasWatched("aaaaaaaaaaa") {
+		t.Error("the unmark was not written, so the next launch remembers a mark that was taken back")
+	}
+}
+
+// A channel row carries a tick too, and it means followed rather than watched.
+// Marking one is a keypress on the wrong row, and saying which key it wanted
+// is cheaper than doing nothing.
+func TestMarkingAChannelRowSaysWhichKeyItWanted(t *testing.T) {
+	b := newBrowser(t)
+
+	b.start(t)
+	b.eventually(t, "nothing followed yet")
+
+	b.screen.press(key(':'))
+	b.screen.typed("channels papa meat")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "2 channels for")
+
+	b.screen.press(key('m'))
+	b.eventually(t, "channels are followed, not watched")
+	b.quit(t)
 }
