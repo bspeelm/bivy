@@ -1063,6 +1063,11 @@ func tidy(detail string) string {
 	for _, level := range []string{"ERROR: ", "WARNING: "} {
 		detail = strings.TrimPrefix(detail, level)
 	}
+	// bivy is the reader being told to pass a flag it refuses (ADR-004), and
+	// the advice crowds the cause off the end of a status line.
+	if i := strings.Index(detail, ". Use --"); i > 0 {
+		detail = detail[:i+1]
+	}
 	if strings.HasPrefix(detail, "[") {
 		if i := strings.Index(detail, "] "); i > 0 {
 			rest := detail[i+2:]
