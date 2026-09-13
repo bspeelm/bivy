@@ -114,7 +114,7 @@ Once bivy is open, most of it is keys rather than commands:
     :q                      quit
 
 Playing needs mpv, and searching needs yt-dlp. The dashboard needs neither.
-bivy never logs in, reads no cookies, and downloads nothing.
+bivy never logs in, holds no account, and downloads nothing.
 `
 
 func (a *app) run(ctx context.Context, args []string) int {

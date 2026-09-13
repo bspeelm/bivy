@@ -13,12 +13,14 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/bspeelm/bivy/internal/media"
+	"github.com/bspeelm/bivy/internal/visitor"
 )
 
 // searchWait bounds a query: the extractor talks to a service bivy does not
@@ -68,12 +70,25 @@ func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 		binary = "yt-dlp"
 	}
 
+	// A visitor for this search and no other, gone when it returns (ADR-016).
+	dir, err := os.MkdirTemp("", "bivy-")
+	if err != nil {
+		return "", fmt.Errorf("making a place for the visitor cookie: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	cookies, err := visitor.Write(dir)
+	if err != nil {
+		return "", err
+	}
+
 	cmd := exec.CommandContext(ctx, binary, append([]string{
 		"--flat-playlist",
 		"--dump-json",
 		"--no-warnings",
 		"--ignore-config",
 		"--no-playlist",
+		"--cookies", cookies,
 	}, args...)...)
 
 	var stderr strings.Builder

@@ -1041,8 +1041,8 @@ func (b *browser) draw() error {
 // playbackTrouble explains a video that would not play.
 //
 // The failure that actually happens is the extractor being refused a stream —
-// bivy holds no account and sends no cookie (ADR-004), and that is exactly the
-// request a bot check declines. Saying nothing, which is what bivy did before
+// bivy holds no account (ADR-004), and that is exactly the request a bot check
+// declines. Saying nothing, which is what bivy did before
 // this existed, looks like the keypress was ignored.
 func playbackTrouble(e mpv.Event) string {
 	if e.Detail == "" {
