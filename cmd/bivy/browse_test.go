@@ -2078,6 +2078,11 @@ func TestTidy(t *testing.T) {
 			"Sign in to confirm you're not a bot.",
 		},
 		{
+			"advice bivy will not take",
+			"Sign in to confirm you're not a bot. Use --cookies for the authentication.",
+			"Sign in to confirm you're not a bot.",
+		},
+		{
 			"its documentation",
 			"Something went wrong. See  https://example.invalid/faq  for more",
 			"Something went wrong.",
