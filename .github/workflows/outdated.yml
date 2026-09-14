@@ -1,0 +1,138 @@
+# What has moved upstream since anyone last looked.
+#
+# bivy pins three things that rot at different speeds and none of them
+# announces itself: one direct dependency, the Go toolchain that go.mod names,
+# and the actions these workflows run. The toolchain is the load-bearing one —
+# scripts/dist.sh pins GOTOOLCHAIN to that line so a release can be rebuilt
+# byte for byte (ADR-014), which makes it a number that must be moved
+# deliberately and therefore a number nothing moves at all.
+#
+# What is NOT here: mpv and the extractor. They are not pinned, they are
+# floors, and what actually breaks with them is behaviour rather than version
+# — which integration.yml already exercises against the live service daily.
+#
+# This opens or updates one tracking issue. Never a pull request: a bot that
+# bumps the toolchain is a bot that changes what a published archive rebuilds
+# into, and the whole point of pinning it was that a person decided.
+name: outdated
+
+on:
+  schedule:
+    # Mondays, early. Nothing here is urgent, and weekly is rare enough that
+    # the issue does not become wallpaper.
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  outdated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: ask what has moved
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          : > report.md
+
+          # --- modules -------------------------------------------------------
+          # -u asks the proxy what is newer. Failures here are the proxy being
+          # unreachable, which is not news about this repository.
+          if GOFLAGS= go list -m -u -f \
+              '{{if .Update}}| `{{.Path}}` | {{.Version}} | {{.Update.Version}} | {{if .Indirect}}indirect{{else}}**direct**{{end}} |{{end}}' \
+              all > modules.txt 2>/dev/null; then
+            if [ -s modules.txt ]; then
+              printf '### Modules\n\n| module | pinned | latest | |\n|---|---|---|---|\n' >> report.md
+              cat modules.txt >> report.md
+              printf '\n' >> report.md
+            fi
+          else
+            printf '### Modules\n\nCould not reach the module proxy this run.\n\n' >> report.md
+          fi
+
+          # --- the toolchain -------------------------------------------------
+          pinned=$(awk '/^go /{print "go"$2; exit}' go.mod)
+          latest=$(curl -fsS --max-time 30 'https://go.dev/dl/?mode=json' 2>/dev/null \
+                   | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["version"])' 2>/dev/null || true)
+          if [ -n "$latest" ] && [ "$pinned" != "$latest" ]; then
+            printf '### Toolchain\n\n`go.mod` names **%s**; the latest release is **%s**.\n\n' \
+              "$pinned" "$latest" >> report.md
+            printf 'This is the version `scripts/dist.sh` builds releases with, so moving it changes what a tag rebuilds into. Deliberate or not at all (ADR-014).\n\n' >> report.md
+          fi
+
+          # --- the actions ---------------------------------------------------
+          actions=$(grep -rhoE 'uses: [A-Za-z0-9._-]+/[A-Za-z0-9._-]+@v[0-9]+' .github/workflows/ \
+                    | sed 's/uses: //' | sort -u)
+          : > actions.md
+          for a in $actions; do
+            repo=${a%@*}
+            have=${a#*@}
+            want=$(gh api "repos/$repo/releases/latest" --jq .tag_name 2>/dev/null || true)
+            [ -z "$want" ] && continue
+            # The major tag is what these workflows track: v4, not v4.3.1.
+            case "$want" in
+              "$have"|"$have".*) ;;
+              *) printf '| `%s` | %s | %s |\n' "$repo" "$have" "$want" >> actions.md ;;
+            esac
+          done
+          if [ -s actions.md ]; then
+            printf '### Actions\n\n| action | pinned | latest |\n|---|---|---|\n' >> report.md
+            cat actions.md >> report.md
+            printf '\n' >> report.md
+          fi
+
+          if [ -s report.md ]; then
+            echo "stale=yes" >> "$GITHUB_ENV"
+          else
+            echo "stale=no" >> "$GITHUB_ENV"
+          fi
+          cat report.md
+
+      - name: open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Created here rather than by hand, so this works in a fork with no
+          # setup. Already existing is the normal case, not a failure.
+          gh label create outdated \
+            --description "Something pinned has moved upstream" \
+            --color ededed 2>/dev/null || true
+
+          existing=$(gh issue list --label outdated --state open \
+            --json number --jq '.[0].number // empty')
+
+          if [ "$stale" = "no" ]; then
+            if [ -n "$existing" ]; then
+              gh issue close "$existing" \
+                --comment "Everything pinned is current again. Closed by the weekly check."
+            fi
+            echo "nothing has moved"
+            exit 0
+          fi
+
+          {
+            printf 'The weekly check found pins that have moved upstream.\n\n'
+            cat report.md
+            printf -- '---\n\nNothing here is applied automatically, deliberately: the toolchain line decides what a published archive rebuilds into, so it moves when a person moves it (ADR-014).\n\nThis issue is rewritten by each run rather than replaced, so its history is the comment thread.\n'
+          } > body.md
+
+          # One issue, edited -- not one a week, which is how a report becomes
+          # something nobody reads.
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body-file body.md
+            echo "updated #$existing"
+          else
+            gh issue create --title "Pinned versions have moved upstream" \
+              --label outdated --body-file body.md
+          fi
