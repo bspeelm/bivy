@@ -371,6 +371,43 @@ func TestNothingInCIGivesTheExtractorACredential(t *testing.T) {
 	}
 }
 
+// §11 promises a weekly look at what has moved, and promises it will not act
+// on the answer. Both halves are the claim: a job nothing schedules is a
+// paragraph, and a job that opened a pull request would be moving the pin that
+// decides what a published archive rebuilds into.
+func TestTheOutdatedCheckOpensAnIssueAndNeverAPullRequest(t *testing.T) {
+	plan := read(t, "PLAN.md")
+	if !strings.Contains(plan, "asks what has moved upstream") {
+		t.Skip("§11 no longer claims a weekly check")
+	}
+
+	dir := filepath.Join(".github", "workflows")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var checker string
+	for _, e := range entries {
+		body := read(t, filepath.Join(dir, e.Name()))
+		if strings.Contains(body, "gh issue create") {
+			checker = body
+		}
+	}
+	if checker == "" {
+		t.Fatalf("§11 says a weekly job opens a tracking issue, and nothing in %s does", dir)
+	}
+
+	if !strings.Contains(checker, "schedule:") || !strings.Contains(checker, "cron:") {
+		t.Error("the check is not scheduled, so it runs when somebody remembers")
+	}
+	for _, acting := range []string{"gh pr create", "pull-requests: write", "peter-evans/create-pull-request"} {
+		if strings.Contains(checker, acting) {
+			t.Errorf("the check contains %q; §11 says it reports and does not act", acting)
+		}
+	}
+}
+
 // docs/review/ says in prose whether a release has happened yet. That sentence
 // is read by someone deciding whether to trust the directory, and it is the
 // kind of sentence that stays true for exactly one release.

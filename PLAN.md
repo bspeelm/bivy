@@ -353,6 +353,15 @@ The conformance check skips in CI rather than failing: the development
 standard lives outside this repository and is not checked out beside it. That
 is the one part of the gate a green CI run does not prove.
 
+Once a week, a job asks what has moved upstream: the modules, the Go version
+`go.mod` names, and the actions these workflows run. It opens one tracking
+issue and never a pull request. The toolchain line decides what a published
+archive rebuilds into, so a bot that bumped it would be quietly changing the
+answer to "does this tag still build the bytes you downloaded" — which is the
+one question the reproducibility offer exists to answer. mpv and the extractor
+are not in that job: they are floors rather than pins, and what breaks with
+them is behaviour, which the scheduled integration run exercises instead.
+
 A release is a tag (ADR-014). Pushing `v<major>.<minor>.<patch>` runs that same
 gate on both platforms, then builds one archive per platform in
 `scripts/platforms` and publishes them with a `SHA256SUMS` file. `make dist` is
