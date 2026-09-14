@@ -31,9 +31,9 @@ jobs:
   outdated:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -60,12 +60,37 @@ jobs:
           fi
 
           # --- the toolchain -------------------------------------------------
+          # Against the newest patch of its own line, not against the newest Go
+          # there is: this version is also the module's minimum, and chasing
+          # every major would raise the floor under everyone building from
+          # source. A line falling out of support is the thing worth saying,
+          # and it is said separately.
           pinned=$(awk '/^go /{print "go"$2; exit}' go.mod)
-          latest=$(curl -fsS --max-time 30 'https://go.dev/dl/?mode=json' 2>/dev/null \
-                   | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["version"])' 2>/dev/null || true)
-          if [ -n "$latest" ] && [ "$pinned" != "$latest" ]; then
-            printf '### Toolchain\n\n`go.mod` names **%s**; the latest release is **%s**.\n\n' \
-              "$pinned" "$latest" >> report.md
+          line=$(printf '%s' "$pinned" | cut -d. -f1,2)
+          : > toolchain.md
+          curl -fsS --max-time 30 'https://go.dev/dl/?mode=json&include=all' > go.json 2>/dev/null || true
+          if [ -s go.json ]; then
+            newest=$(jq -r '[.[] | select(.stable)][0].version // empty' go.json)
+            patch=$(jq -r --arg l "$line." \
+              '[.[] | select(.stable) | .version | select(startswith($l))][0] // empty' go.json)
+
+            if [ -n "$patch" ] && [ "$patch" != "$pinned" ]; then
+              printf '`go.mod` names **%s**; **%s** is the newest in that line.\n\n' \
+                "$pinned" "$patch" >> toolchain.md
+            fi
+            # Go supports the two most recent lines, so more than one behind is
+            # a line that has stopped getting security fixes.
+            if [ -n "$newest" ]; then
+              behind=$(( $(printf '%s' "$newest" | cut -d. -f2) - $(printf '%s' "$pinned" | cut -d. -f2) ))
+              if [ "$behind" -gt 1 ]; then
+                printf '**%s is no longer one of the two supported lines** (newest is %s), so it has stopped getting security fixes.\n\n' \
+                  "$line" "$newest" >> toolchain.md
+              fi
+            fi
+          fi
+          if [ -s toolchain.md ]; then
+            printf '### Toolchain\n\n' >> report.md
+            cat toolchain.md >> report.md
             printf 'This is the version `scripts/dist.sh` builds releases with, so moving it changes what a tag rebuilds into. Deliberate or not at all (ADR-014).\n\n' >> report.md
           fi
 
