@@ -27,8 +27,8 @@ type (
 	Refresh struct{}
 	// HideWatched hides the videos already watched, or brings them back.
 	HideWatched struct{}
-	// ShowQueue lists what has been saved to watch later.
-	ShowQueue struct{}
+	// ShowPlaylist lists what has been lined up to watch later.
+	ShowPlaylist struct{}
 	// ShowHelp lists the commands.
 	ShowHelp struct{}
 	// Quit ends the session.
@@ -42,8 +42,8 @@ type Command struct {
 	// Argument names what follows, and is empty for commands that take none.
 	Argument string
 	// Short is a spelling that beats prefix matching. One command has one,
-	// because ":q" is what quitting is and a command that made it ambiguous
-	// would be taking the most-used thing on the line away from it.
+	// because ":q" is what quitting is and a new name starting with the same
+	// letter would take the most-used thing on the line away from it.
 	Short string
 	run   func(arg string) (Intent, error)
 }
@@ -115,9 +115,9 @@ var Commands = []Command{
 		run:     func(string) (Intent, error) { return Refresh{}, nil },
 	},
 	{
-		Name:    "queue",
-		Summary: "what you have saved for later, oldest first",
-		run:     func(string) (Intent, error) { return ShowQueue{}, nil },
+		Name:    "playlist",
+		Summary: "what you have lined up for later, oldest first",
+		run:     func(string) (Intent, error) { return ShowPlaylist{}, nil },
 	},
 	{
 		Name:    "watched",

@@ -39,14 +39,14 @@ type State struct {
 	// Watched is when each video was watched to its end. A map so that asking
 	// about one is a lookup rather than a scan of everything ever seen.
 	Watched map[string]time.Time `json:"watched,omitempty"`
-	// Queue is what has been saved to watch later, oldest first.
-	Queue []Queued `json:"queue,omitempty"`
+	// Playlist is what has been lined up to watch later, oldest first.
+	Playlist []PlaylistVideo `json:"playlist,omitempty"`
 }
 
-// Queued is a video kept for later. Stored rather than pointed at: a search
+// PlaylistVideo is a video lined up for later. Stored rather than pointed at: a search
 // result belongs to no feed, and a feed has rolled past its own oldest entries
 // by the time anyone comes back to them.
-type Queued struct {
+type PlaylistVideo struct {
 	ID        string        `json:"id"`
 	Title     string        `json:"title"`
 	Author    string        `json:"author,omitempty"`
@@ -61,21 +61,20 @@ type Queued struct {
 func (s State) copy() State {
 	next := s
 	next.Channels = append([]Channel(nil), s.Channels...)
-	next.Queue = append([]Queued(nil), s.Queue...)
+	next.Playlist = append([]PlaylistVideo(nil), s.Playlist...)
 	return next
 }
 
-// Save keeps a video for later, at the end of the queue. Saving one already
-// there changes nothing: the queue is a set that remembers an order, and
-// moving a row because it was pressed twice is a list nobody can keep a place
-// in.
-func Save(s State, v media.Video, now time.Time) State {
-	if !media.IsVideoID(v.ID) || s.IsQueued(v.ID) {
+// AddToPlaylist puts a video at the end. Adding one already there changes
+// nothing: a row that moved because it was pressed twice is a list nobody can
+// keep a place in.
+func AddToPlaylist(s State, v media.Video, now time.Time) State {
+	if !media.IsVideoID(v.ID) || s.InPlaylist(v.ID) {
 		return s
 	}
 
 	next := s.copy()
-	next.Queue = append(next.Queue, Queued{
+	next.Playlist = append(next.Playlist, PlaylistVideo{
 		ID:        v.ID,
 		Title:     v.Title,
 		Author:    v.Author,
@@ -87,25 +86,25 @@ func Save(s State, v media.Video, now time.Time) State {
 	return next
 }
 
-// Unsave drops a video from the queue, whether it was there or not.
-func Unsave(s State, videoID string) State {
-	if !s.IsQueued(videoID) {
+// RemoveFromPlaylist drops a video, whether it was on the list or not.
+func RemoveFromPlaylist(s State, videoID string) State {
+	if !s.InPlaylist(videoID) {
 		return s
 	}
 
 	next := s.copy()
-	next.Queue = next.Queue[:0]
-	for _, q := range s.Queue {
+	next.Playlist = next.Playlist[:0]
+	for _, q := range s.Playlist {
 		if q.ID != videoID {
-			next.Queue = append(next.Queue, q)
+			next.Playlist = append(next.Playlist, q)
 		}
 	}
 	return next
 }
 
-// IsQueued reports whether a video is waiting to be watched.
-func (s State) IsQueued(videoID string) bool {
-	for _, q := range s.Queue {
+// InPlaylist reports whether a video is lined up.
+func (s State) InPlaylist(videoID string) bool {
+	for _, q := range s.Playlist {
 		if q.ID == videoID {
 			return true
 		}
@@ -113,10 +112,10 @@ func (s State) IsQueued(videoID string) bool {
 	return false
 }
 
-// QueueRows is the queue as rows, in the order it was saved.
-func QueueRows(s State) []Row {
-	rows := make([]Row, 0, len(s.Queue))
-	for _, q := range s.Queue {
+// PlaylistRows is the list as rows, in the order it was built.
+func PlaylistRows(s State) []Row {
+	rows := make([]Row, 0, len(s.Playlist))
+	for _, q := range s.Playlist {
 		rows = append(rows, Row{
 			Video: media.Video{
 				ID:        q.ID,
