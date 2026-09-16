@@ -2100,3 +2100,38 @@ func TestTidy(t *testing.T) {
 		})
 	}
 }
+
+// A video finishing used to rebuild the dashboard over whatever was on screen,
+// so watching something from a search threw the search away -- for a tick that
+// could have been set on the row already there.
+func TestFinishingAVideoDoesNotThrowAwayTheSearch(t *testing.T) {
+	b := newBrowser(t)
+
+	b.start(t)
+	b.eventually(t, "nothing followed yet")
+
+	b.screen.press(key('/'))
+	b.screen.typed("anything")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "A Search Result")
+
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "playing ·")
+	b.player.events <- mpv.Event{Name: "end-file", Reason: "eof"}
+	b.eventually(t, "watched · A Search Result")
+
+	// Still the search: the results are there and the heading still names it.
+	b.eventually(t, "Another Result")
+	got := b.screen.last()
+	if !strings.Contains(got, "A Search Result") {
+		t.Error("the results went away when the video finished")
+	}
+	if !strings.Contains(got, "anything") {
+		t.Errorf("the heading no longer names the search:\n%s", got)
+	}
+	// And the tick landed on the row that was played.
+	if !strings.Contains(got, "✓") {
+		t.Error("the watched row carries no tick")
+	}
+	b.quit(t)
+}
