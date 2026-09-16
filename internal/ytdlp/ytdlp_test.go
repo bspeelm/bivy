@@ -78,7 +78,7 @@ func TestSearchTermBoundsTheCount(t *testing.T) {
 		{1, "ytsearch1:cats"},
 		{0, "ytsearch30:cats"},
 		{-1, "ytsearch30:cats"},
-		{9999, "ytsearch120:cats"},
+		{9999, "ytsearch9999:cats"},
 	} {
 		got, err := SearchTerm("cats", tc.limit)
 		if err != nil {
@@ -377,7 +377,17 @@ func TestAskingForASecondPageAsksForMoreThanTheFirst(t *testing.T) {
 	if second != "ytsearch60:cats" {
 		t.Errorf("the second page asked for %q, want ytsearch60:cats", second)
 	}
-	if MaxResults <= 30 {
-		t.Errorf("MaxResults is %d, which is one page — nothing can page past the first", MaxResults)
+	// Nothing above one page is clamped at all. Measured against the live
+	// service on 2026-09-16: ytsearch300 returns 300 rows in 9s and
+	// ytsearch1000 returns 585 in 20s -- the service runs out around six
+	// hundred, well inside the 45s any one query is given. A ceiling here
+	// could only ever stop paging earlier than that, for no reason anybody
+	// could name, and loadMore already stops when a page adds nothing.
+	deep, err := SearchTerm("cats", 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deep != "ytsearch5000:cats" {
+		t.Errorf("a deep page asked for %q; bivy is imposing a ceiling of its own", deep)
 	}
 }

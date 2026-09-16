@@ -27,12 +27,8 @@ import (
 // control, and a longer silence is a failure to report rather than wait out.
 const searchWait = 45 * time.Second
 
-// MaxResults is where paging stops. It has to be more than one page, or the
-// first request reaches the ceiling and every later one is clamped back to the
-// rows already on screen.
-const MaxResults = 120
-
-// DefaultResults is one page: a nonsense limit should not cost the ceiling.
+// DefaultResults is one page, and only what a nonsense limit gets: there is no
+// ceiling, because the service stops yielding long before anything else would.
 const DefaultResults = 30
 
 // Client runs the extractor.
@@ -127,11 +123,8 @@ func SearchTerm(query string, limit int) (string, error) {
 		return "", errors.New("that search is too long")
 	}
 
-	switch {
-	case limit < 1:
+	if limit < 1 {
 		limit = DefaultResults
-	case limit > MaxResults:
-		limit = MaxResults
 	}
 	return "ytsearch" + strconv.Itoa(limit) + ":" + query, nil
 }
@@ -224,11 +217,8 @@ func (c *Client) Channels(ctx context.Context, query string, limit int) ([]media
 	if len(query) > 200 {
 		return nil, errors.New("that search is too long")
 	}
-	switch {
-	case limit < 1:
+	if limit < 1 {
 		limit = DefaultResults
-	case limit > MaxResults:
-		limit = MaxResults
 	}
 
 	target := "https://www.youtube.com/results?search_query=" +
@@ -253,11 +243,8 @@ func (c *Client) Uploads(ctx context.Context, channelID string, limit int) (medi
 	if !media.IsChannelID(channelID) {
 		return media.Channel{}, fmt.Errorf("%q is not a channel identifier", channelID)
 	}
-	switch {
-	case limit < 1:
+	if limit < 1 {
 		limit = DefaultResults
-	case limit > MaxResults:
-		limit = MaxResults
 	}
 
 	out, err := c.run(ctx, "--playlist-end", strconv.Itoa(limit),
