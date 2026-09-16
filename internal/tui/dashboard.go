@@ -455,9 +455,7 @@ func footer(d Dashboard, width int) string {
 func hints(d Dashboard) string {
 	switch {
 	case d.Busy:
-		// Nothing, because nothing would be true: fetching holds the loop, so
-		// no key does anything until it returns. The heading says what is
-		// happening; offering "search again" under it said the opposite.
+		// Nothing would be true: fetching holds the loop, so no key is read.
 		return ""
 	case len(d.Rows) == 0 && d.Query != "":
 		return noResults
