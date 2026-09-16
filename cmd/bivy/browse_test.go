@@ -2341,3 +2341,57 @@ func TestClosingAWindowStopsThePlayThrough(t *testing.T) {
 		t.Errorf("played %d videos; closing the window should have stopped at one", got)
 	}
 }
+
+// Starting a run on the last row must end it, not send it round again. The
+// finished row leaves the playlist, so clamping the cursor into the shortened
+// list walks it backwards through rows nobody chose.
+func TestPlayingThroughFromTheLastRowStops(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(key('s'))
+	b.eventually(t, "on the playlist · The newest thing")
+	b.screen.press(named(term.KeyDown), key('s'))
+	b.eventually(t, "on the playlist · An older thing")
+
+	b.screen.press(key(':'))
+	b.screen.typed("playlist")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "playlist · 2 videos")
+
+	// Start on the *last* row.
+	b.screen.press(named(term.KeyEnd), key('p'))
+	b.eventually(t, "playing · An older thing")
+
+	b.player.events <- mpv.Event{Name: "end-file", Reason: "eof"}
+	b.eventually(t, "that was the last one")
+	b.quit(t)
+
+	if got := b.player.watched(); len(got) != 1 {
+		t.Errorf("played %d videos from the last row; want it to stop at one, got %v", len(got), got)
+	}
+}
+
+// The same at the end of any other list, where the row does not leave: the
+// cursor cannot move past the end, so a run there replayed the same video for
+// as long as anyone let it.
+func TestPlayingThroughFromTheLastRowOfAFeedStops(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+
+	b.screen.press(named(term.KeyEnd), key('p'))
+	b.eventually(t, "playing ·")
+
+	b.player.events <- mpv.Event{Name: "end-file", Reason: "eof"}
+	b.eventually(t, "that was the last one")
+	b.quit(t)
+
+	if got := b.player.watched(); len(got) != 1 {
+		t.Errorf("played %d videos from the last row; want one, got %v", len(got), got)
+	}
+}

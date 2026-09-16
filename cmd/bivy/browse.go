@@ -859,12 +859,16 @@ func (b *browser) report(ctx context.Context, e mpv.Event) {
 	}
 	// Only the dashboard is rebuilt; a tick is not worth the screen it was
 	// read on. Every other list keeps its rows and marks the one that played.
+	// Whether a run has anywhere left to go. The finished row has left the
+	// playlist, so the one after it has taken its index -- and when there was
+	// none, clamping walks the cursor backwards into rows nobody chose.
+	more := true
 	switch {
 	case b.playlist:
-		// The row that just finished has left, so the cursor is already on
-		// the one after it.
+		at := b.selected
 		b.show(follow.PlaylistRows(b.state))
-		b.selected = tui.Move(b.selected, 0, len(b.rows))
+		more = at < len(b.rows)
+		b.selected = tui.Move(at, 0, len(b.rows))
 	case b.query == "" && b.viewing == "":
 		b.show(follow.Dashboard(b.state, b.fetched, dashboardRows))
 	default:
@@ -878,17 +882,22 @@ func (b *browser) report(ctx context.Context, e mpv.Event) {
 	b.playing = media.Video{}
 
 	if b.through {
-		b.playNext(ctx)
+		b.playNext(ctx, more)
 	}
 }
 
-// playNext carries a run through the list on to the row after the one that
-// finished, and stops when there is nothing left rather than wrapping.
-func (b *browser) playNext(ctx context.Context) {
+// playNext carries a run on to the row after the one that finished, and stops
+// at the end of the list rather than starting it again.
+func (b *browser) playNext(ctx context.Context, more bool) {
 	if !b.playlist {
+		// Nowhere left is the cursor refusing to move: Move clamps at the
+		// end, so without this a run replayed its last video for as long as
+		// anyone let it.
+		was := b.selected
 		b.selected = tui.Move(b.selected, 1, len(b.rows))
+		more = b.selected != was
 	}
-	if b.selected >= len(b.rows) || b.rows[b.selected].IsChannel() {
+	if !more || b.selected >= len(b.rows) || b.rows[b.selected].IsChannel() {
 		b.through = false
 		b.status = "that was the last one"
 		return
