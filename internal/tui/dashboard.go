@@ -66,6 +66,8 @@ type Dashboard struct {
 	Query    string
 	Channels bool
 	Viewing  string
+	// Queue means the list is what has been saved for later.
+	Queue bool
 	// Busy means the thing on screen is still arriving. Said in the heading,
 	// because "0 results" and "not finished looking" are different answers
 	// and the second one reads as the first.
@@ -105,12 +107,14 @@ const (
 )
 
 const (
-	keyHints     = "↑↓ move · enter play · m mark · / search · : commands · r refresh · :q quit"
-	resultHints  = "↑↓ move · enter play · f follow · m mark · M more · esc back · :q quit"
-	channelHints = "↑↓ move · enter open · f follow · M more · esc back · :q quit"
-	viewingHints = "↑↓ move · enter play · f follow · m mark · M more · esc back · :q quit"
-	emptyHints   = "/ search · : commands · r refresh · :q quit"
-	noResults    = "/ search again · esc back · :q quit"
+	keyHints        = "↑↓ move · enter play · m mark · / search · : commands · r refresh · :q quit"
+	resultHints     = "↑↓ move · enter play · f follow · m mark · M more · esc back · :q quit"
+	channelHints    = "↑↓ move · enter open · f follow · M more · esc back · :q quit"
+	viewingHints    = "↑↓ move · enter play · f follow · m mark · M more · esc back · :q quit"
+	emptyHints      = "/ search · : commands · r refresh · :q quit"
+	noResults       = "/ search again · esc back · :q quit"
+	queueHints      = "↑↓ move · enter play · p play through · m done · s unsave · esc back"
+	emptyQueueHints = "s saves the row under the cursor · esc back · :q quit"
 )
 
 // styled wraps text in an attribute. Width is always measured before this is
@@ -278,6 +282,8 @@ func heading(d Dashboard) string {
 		return "opening " + d.Viewing + "…"
 	case d.Busy:
 		return "fetching…"
+	case d.Queue:
+		return fmt.Sprintf("queue · %s saved", plural(len(d.Rows), "video", "videos"))
 	case d.Viewing != "":
 		return fmt.Sprintf("%s · %s", d.Viewing, plural(len(d.Rows), "video", "videos"))
 	case d.Query != "" && d.Channels:
@@ -457,6 +463,10 @@ func hints(d Dashboard) string {
 	case d.Busy:
 		// Nothing would be true: fetching holds the loop, so no key is read.
 		return ""
+	case d.Queue && len(d.Rows) == 0:
+		return emptyQueueHints
+	case d.Queue:
+		return queueHints
 	case len(d.Rows) == 0 && d.Query != "":
 		return noResults
 	case len(d.Rows) == 0:

@@ -122,7 +122,7 @@ func TestMatching(t *testing.T) {
 // when that stops being true.
 func TestEveryCommandEarnsItsPlace(t *testing.T) {
 	// The rare ones: no argument, and not something anyone does repeatedly.
-	rare := map[string]bool{"help": true, "quit": true, "refresh": true, "watched": true}
+	rare := map[string]bool{"help": true, "quit": true, "refresh": true, "watched": true, "queue": true}
 
 	for _, c := range Commands {
 		if c.Argument == "" && !rare[c.Name] {
@@ -167,7 +167,8 @@ func TestAnUnambiguousPrefixIsTheCommand(t *testing.T) {
 		want Intent
 	}{
 		{"q", Quit{}},
-		{"qu", Quit{}},
+		{"quit", Quit{}},
+		{"que", ShowQueue{}},
 		{"h", ShowHelp{}},
 		{"se cats", Search{Query: "cats"}},
 		{"s cats", Search{Query: "cats"}},
@@ -205,6 +206,11 @@ func TestAnAmbiguousPrefixIsRefused(t *testing.T) {
 		if len(names) < 2 {
 			continue
 		}
+		// Unless a command claims that spelling outright, which one does:
+		// ":q" is quitting and no prefix rule gets to make it ambiguous.
+		if c, found := lookup(prefix); found && c.Short == prefix {
+			continue
+		}
 		checked++
 		if _, err := Parse(prefix); err == nil {
 			t.Errorf("Parse(%q) chose one of %v instead of refusing", prefix, names)
@@ -228,5 +234,28 @@ func TestAnExactNameBeatsALongerMatch(t *testing.T) {
 		if got == nil {
 			t.Errorf("Parse(%q) returned nothing", c.Name)
 		}
+	}
+}
+
+// ":q" is what quitting is, and adding a command beginning with the same
+// letter must not take it away. "queue" did exactly that: both ":q" and ":qu"
+// became ambiguous, and the most-used thing on the command line stopped
+// working.
+func TestQuittingKeepsItsSpelling(t *testing.T) {
+	got, err := Parse("q")
+	if err != nil {
+		t.Fatalf(`Parse("q"): %v`, err)
+	}
+	if _, ok := got.(Quit); !ok {
+		t.Errorf(`Parse("q") = %#v, want Quit`, got)
+	}
+
+	if got := Complete("q"); got != "quit" {
+		t.Errorf(`Complete("q") = %q, want "quit"`, got)
+	}
+
+	// And the spelling it is short for still works in full.
+	if got, err := Parse("quit"); err != nil || got != (Quit{}) {
+		t.Errorf(`Parse("quit") = %#v, %v`, got, err)
 	}
 }
