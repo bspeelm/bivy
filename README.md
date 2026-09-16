@@ -75,16 +75,16 @@ everything there is:
 :_
 
   search <words>   channels <words>   open <channel>   follow <channel>
-  unfollow <channel>   refresh   queue   watched   help   quit
+  unfollow <channel>   refresh   playlist   watched   help   quit
 ```
 
 `/` is the same line with `search ` already in it.
 
-`s` saves the row under the cursor to watch later, and `:queue` is that list,
-oldest first. `p` there plays down from the cursor, starting the next video
+`s` puts the row under the cursor on a playlist to watch later, and
+`:playlist` is that list, oldest first. `p` plays down from the cursor, starting the next video
 when one reaches its end — closing a window stops the run rather than being
-something to fight. `m` in the queue means done: it marks the row watched and
-takes it out, which watching to the end does by itself.
+something to fight. `m` there means done: it marks the row watched and
+takes it off, which watching to the end does by itself.
 
 `:watched` hides the videos you have watched, so the list is what is left
 rather than everything. The same command shows them again, and it lasts for

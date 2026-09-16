@@ -2180,76 +2180,76 @@ func TestABurstOfPressesDrawsFewerFramesThanPresses(t *testing.T) {
 	}
 }
 
-// The whole feature, end to end: save a row, open the queue, find it there.
-func TestSavingARowAndFindingItInTheQueue(t *testing.T) {
+// The whole feature, end to end: save a row, open the saved list, find it there.
+func TestAddingARowAndFindingItOnThePlaylist(t *testing.T) {
 	b := newBrowser(t)
 	b.run(t, "follow", chanA)
 
 	br := b.start(t)
 	b.eventually(t, "The newest thing")
 	b.screen.press(key('s'))
-	b.eventually(t, "saved for later · The newest thing")
+	b.eventually(t, "on the playlist · The newest thing")
 
 	b.screen.press(key(':'))
-	b.screen.typed("queue")
+	b.screen.typed("playlist")
 	b.screen.press(named(term.KeyEnter))
-	b.eventually(t, "queue · 1 video saved")
+	b.eventually(t, "playlist · 1 video")
 	b.eventually(t, "The newest thing")
 	b.quit(t)
 
-	if !br.state.IsQueued("aaaaaaaaaaa") {
+	if !br.state.InPlaylist("aaaaaaaaaaa") {
 		t.Error("the video is not in the saved state")
 	}
 	var saved follow.State
 	if err := b.store.ReadJSON(stateFile, &saved); err != nil {
 		t.Fatal(err)
 	}
-	if !saved.IsQueued("aaaaaaaaaaa") {
+	if !saved.InPlaylist("aaaaaaaaaaa") {
 		t.Error("the queue was not written, so the next launch forgets it")
 	}
 }
 
 // s is a toggle, so changing your mind costs the same keystroke as the choice.
-func TestSavingTwiceTakesItBackOut(t *testing.T) {
+func TestPressingTwiceTakesItBackOff(t *testing.T) {
 	b := newBrowser(t)
 	b.run(t, "follow", chanA)
 
 	br := b.start(t)
 	b.eventually(t, "The newest thing")
 	b.screen.press(key('s'))
-	b.eventually(t, "saved for later")
+	b.eventually(t, "on the playlist")
 	b.screen.press(key('s'))
-	b.eventually(t, "no longer saved · The newest thing")
+	b.eventually(t, "off the playlist · The newest thing")
 	b.quit(t)
 
-	if br.state.IsQueued("aaaaaaaaaaa") {
+	if br.state.InPlaylist("aaaaaaaaaaa") {
 		t.Error("the video is still saved after being unsaved")
 	}
 }
 
-// In the queue, m means done: it marks the row watched and takes it out,
+// In the saved list, m means done: it marks the row watched and takes it out,
 // because a ticked row sitting in a list of things to watch asks to be
 // removed twice.
-func TestMarkingInTheQueueTakesTheRowOut(t *testing.T) {
+func TestMarkingOnThePlaylistTakesTheRowOff(t *testing.T) {
 	b := newBrowser(t)
 	b.run(t, "follow", chanA)
 
 	br := b.start(t)
 	b.eventually(t, "The newest thing")
 	b.screen.press(key('s'))
-	b.eventually(t, "saved for later")
+	b.eventually(t, "on the playlist")
 
 	b.screen.press(key(':'))
-	b.screen.typed("queue")
+	b.screen.typed("playlist")
 	b.screen.press(named(term.KeyEnter))
-	b.eventually(t, "queue · 1 video saved")
+	b.eventually(t, "playlist · 1 video")
 
 	b.screen.press(key('m'))
-	b.eventually(t, "queue · 0 videos saved")
+	b.eventually(t, "playlist · 0 videos")
 	b.quit(t)
 
-	if br.state.IsQueued("aaaaaaaaaaa") {
-		t.Error("the row is still queued after being marked done")
+	if br.state.InPlaylist("aaaaaaaaaaa") {
+		t.Error("the row is still saved after being marked done")
 	}
 	if !br.state.HasWatched("aaaaaaaaaaa") {
 		t.Error("the row was removed without being marked watched")
@@ -2258,14 +2258,14 @@ func TestMarkingInTheQueueTakesTheRowOut(t *testing.T) {
 
 // Watching to the end takes it out wherever it was played from: the queue is
 // what is left to watch.
-func TestFinishingAVideoTakesItOutOfTheQueue(t *testing.T) {
+func TestFinishingAVideoTakesItOffThePlaylist(t *testing.T) {
 	b := newBrowser(t)
 	b.run(t, "follow", chanA)
 
 	br := b.start(t)
 	b.eventually(t, "The newest thing")
 	b.screen.press(key('s'))
-	b.eventually(t, "saved for later")
+	b.eventually(t, "on the playlist")
 
 	b.screen.press(named(term.KeyEnter))
 	b.eventually(t, "playing ·")
@@ -2273,27 +2273,27 @@ func TestFinishingAVideoTakesItOutOfTheQueue(t *testing.T) {
 	b.eventually(t, "watched · The newest thing")
 	b.quit(t)
 
-	if br.state.IsQueued("aaaaaaaaaaa") {
-		t.Error("finishing the video left it in the queue")
+	if br.state.InPlaylist("aaaaaaaaaaa") {
+		t.Error("finishing the video left it saved")
 	}
 }
 
 // p plays down the list: a video reaching its end starts the next one.
-func TestPlayingThroughTheQueue(t *testing.T) {
+func TestPlayingThroughThePlaylist(t *testing.T) {
 	b := newBrowser(t)
 	b.run(t, "follow", chanA)
 
 	b.start(t)
 	b.eventually(t, "The newest thing")
 	b.screen.press(key('s'))
-	b.eventually(t, "saved for later · The newest thing")
+	b.eventually(t, "on the playlist · The newest thing")
 	b.screen.press(named(term.KeyDown), key('s'))
-	b.eventually(t, "saved for later · An older thing")
+	b.eventually(t, "on the playlist · An older thing")
 
 	b.screen.press(key(':'))
-	b.screen.typed("queue")
+	b.screen.typed("playlist")
 	b.screen.press(named(term.KeyEnter))
-	b.eventually(t, "queue · 2 videos saved")
+	b.eventually(t, "playlist · 2 videos")
 
 	b.screen.press(key('p'))
 	b.eventually(t, "playing · The newest thing")
@@ -2320,21 +2320,21 @@ func TestClosingAWindowStopsThePlayThrough(t *testing.T) {
 	b.start(t)
 	b.eventually(t, "The newest thing")
 	b.screen.press(key('s'))
-	b.eventually(t, "saved for later")
+	b.eventually(t, "on the playlist")
 	b.screen.press(named(term.KeyDown), key('s'))
-	b.eventually(t, "saved for later · An older thing")
+	b.eventually(t, "on the playlist · An older thing")
 
 	b.screen.press(key(':'))
-	b.screen.typed("queue")
+	b.screen.typed("playlist")
 	b.screen.press(named(term.KeyEnter))
-	b.eventually(t, "queue · 2 videos saved")
+	b.eventually(t, "playlist · 2 videos")
 
 	b.screen.press(key('p'))
 	b.eventually(t, "playing · The newest thing")
 
 	// What mpv reports when its window is closed.
 	b.player.events <- mpv.Event{Name: "end-file", Reason: "quit"}
-	b.eventually(t, "queue · 2 videos saved")
+	b.eventually(t, "playlist · 2 videos")
 	b.quit(t)
 
 	if got := len(b.player.watched()); got != 1 {

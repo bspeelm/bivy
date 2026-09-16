@@ -84,9 +84,9 @@ type browser struct {
 	all         []follow.Row
 	rows        []follow.Row
 	hideWatched bool
-	// queued means the list on screen is the saved queue rather than a feed,
-	// a search or a channel.
-	queued bool
+	// playlist means the list on screen is what was lined up for later rather
+	// than a feed, a search or a channel.
+	playlist bool
 	// through means a video ending should start the next one down.
 	through bool
 	failed  []string
@@ -280,7 +280,7 @@ func (b *browser) handleRune(ctx context.Context, r rune) (done bool) {
 	case 'f':
 		b.followRow(ctx)
 	case 's':
-		b.saveRow()
+		b.listRow()
 	case 'p':
 		b.playThrough(ctx)
 	case 'm':
@@ -348,13 +348,13 @@ func (b *browser) act(ctx context.Context, intent tui.Intent) (done bool) {
 	case tui.Quit:
 		return true
 	case tui.ShowHelp:
-		b.status = "keys: ↑↓ move · enter play · s save · m watched · / search · :q quit"
+		b.status = "keys: ↑↓ move · enter play · s list · m watched · / search · :q quit"
 	case tui.Refresh:
 		b.refresh(ctx)
 	case tui.HideWatched:
 		b.toggleWatched()
-	case tui.ShowQueue:
-		b.showQueue()
+	case tui.ShowPlaylist:
+		b.showPlaylist()
 	case tui.Search:
 		b.runSearch(ctx, v.Query)
 	case tui.Channels:
@@ -512,7 +512,7 @@ func (b *browser) reload(ctx context.Context) {
 	if len(fetched) > 0 {
 		b.fetched, b.failed, b.stale = fetched, failed, stale
 	}
-	b.query, b.channels, b.viewing, b.queued, b.back = "", false, "", false, nil
+	b.query, b.channels, b.viewing, b.playlist, b.back = "", false, "", false, nil
 	b.show(follow.Dashboard(b.state, b.fetched, dashboardRows))
 	b.selected = tui.Move(b.selected, 0, len(b.rows))
 }
@@ -535,7 +535,7 @@ func (b *browser) followRow(ctx context.Context) {
 // runChannelSearch replaces the rows with channels.
 func (b *browser) runChannelSearch(ctx context.Context, query string) {
 	b.push()
-	b.query, b.channels, b.viewing, b.queued = query, true, "", false
+	b.query, b.channels, b.viewing, b.playlist = query, true, "", false
 	b.show(nil)
 	b.selected, b.busy = 0, true
 	b.status = ""
@@ -563,7 +563,7 @@ type view struct {
 	all      []follow.Row
 	query    string
 	channels bool
-	queued   bool
+	playlist bool
 	viewing  string
 	selected int
 }
@@ -574,7 +574,7 @@ func (b *browser) push() {
 		all:      b.all,
 		query:    b.query,
 		channels: b.channels,
-		queued:   b.queued,
+		playlist: b.playlist,
 		viewing:  b.viewing,
 		selected: b.selected,
 	})
@@ -588,7 +588,7 @@ func (b *browser) pop() bool {
 	last := b.back[len(b.back)-1]
 	b.back = b.back[:len(b.back)-1]
 
-	b.query, b.channels, b.viewing, b.queued = last.query, last.channels, last.viewing, last.queued
+	b.query, b.channels, b.viewing, b.playlist = last.query, last.channels, last.viewing, last.playlist
 	b.show(last.all)
 	b.selected = tui.Move(last.selected, 0, len(b.rows))
 	b.status = ""
@@ -691,7 +691,7 @@ func (b *browser) channelRows(id string, videos []media.Video) []follow.Row {
 // to.
 func (b *browser) runSearch(ctx context.Context, query string) {
 	b.push()
-	b.query, b.channels, b.viewing, b.queued = query, false, "", false
+	b.query, b.channels, b.viewing, b.playlist = query, false, "", false
 	b.show(nil)
 	b.selected, b.busy = 0, true
 	b.status = ""
@@ -851,19 +851,19 @@ func (b *browser) report(ctx context.Context, e mpv.Event) {
 
 	b.status = "watched · " + b.playing.Title
 	b.state = follow.MarkWatched(b.state, b.playing.ID, b.app.now())
-	// Watching something to its end takes it out of the queue wherever it was
-	// played from, because the queue is what is left to watch.
-	b.state = follow.Unsave(b.state, b.playing.ID)
+	// Watching to the end takes a row off the playlist wherever it was played
+	// from, because the list is what is left to watch.
+	b.state = follow.RemoveFromPlaylist(b.state, b.playing.ID)
 	if err := b.app.store.WriteJSON(stateFile, b.state); err != nil {
 		b.status = "could not record that as watched: " + err.Error()
 	}
 	// Only the dashboard is rebuilt; a tick is not worth the screen it was
 	// read on. Every other list keeps its rows and marks the one that played.
 	switch {
-	case b.queued:
+	case b.playlist:
 		// The row that just finished has left, so the cursor is already on
 		// the one after it.
-		b.show(follow.QueueRows(b.state))
+		b.show(follow.PlaylistRows(b.state))
 		b.selected = tui.Move(b.selected, 0, len(b.rows))
 	case b.query == "" && b.viewing == "":
 		b.show(follow.Dashboard(b.state, b.fetched, dashboardRows))
@@ -885,7 +885,7 @@ func (b *browser) report(ctx context.Context, e mpv.Event) {
 // playNext carries a run through the list on to the row after the one that
 // finished, and stops when there is nothing left rather than wrapping.
 func (b *browser) playNext(ctx context.Context) {
-	if !b.queued {
+	if !b.playlist {
 		b.selected = tui.Move(b.selected, 1, len(b.rows))
 	}
 	if b.selected >= len(b.rows) || b.rows[b.selected].IsChannel() {
@@ -896,48 +896,48 @@ func (b *browser) playNext(ctx context.Context) {
 	b.enter(ctx)
 }
 
-// showQueue lists what has been saved for later.
-func (b *browser) showQueue() {
+// showPlaylist lists what has been lined up for later.
+func (b *browser) showPlaylist() {
 	b.push()
-	b.query, b.channels, b.viewing, b.queued = "", false, "", true
-	b.show(follow.QueueRows(b.state))
+	b.query, b.channels, b.viewing, b.playlist = "", false, "", true
+	b.show(follow.PlaylistRows(b.state))
 	b.selected, b.more, b.status = 0, nil, ""
 	if len(b.rows) == 0 {
-		b.status = "nothing saved yet — s saves the row under the cursor"
+		b.status = "nothing lined up yet — s adds the row under the cursor"
 	}
 }
 
-// saveRow puts the row under the cursor in the queue, or takes it out again.
-func (b *browser) saveRow() {
+// listRow puts the row under the cursor on the playlist, or takes it off.
+func (b *browser) listRow() {
 	if b.selected >= len(b.rows) {
 		return
 	}
 	r := b.rows[b.selected]
 	if r.IsChannel() {
-		b.status = "channels are followed, not saved — f follows this one"
+		b.status = "channels are followed, not listed — f follows this one"
 		return
 	}
 
-	saved := !b.state.IsQueued(r.Video.ID)
-	if saved {
-		b.state = follow.Save(b.state, r.Video, b.app.now())
+	listed := !b.state.InPlaylist(r.Video.ID)
+	if listed {
+		b.state = follow.AddToPlaylist(b.state, r.Video, b.app.now())
 	} else {
-		b.state = follow.Unsave(b.state, r.Video.ID)
+		b.state = follow.RemoveFromPlaylist(b.state, r.Video.ID)
 	}
 	if err := b.app.store.WriteJSON(stateFile, b.state); err != nil {
 		b.status = "could not record that: " + err.Error()
 		return
 	}
 
-	if b.queued {
-		b.show(follow.QueueRows(b.state))
+	if b.playlist {
+		b.show(follow.PlaylistRows(b.state))
 		b.selected = tui.Move(b.selected, 0, len(b.rows))
 	}
-	if saved {
-		b.status = "saved for later · " + r.Video.Title
+	if listed {
+		b.status = "on the playlist · " + r.Video.Title
 		return
 	}
-	b.status = "no longer saved · " + r.Video.Title
+	b.status = "off the playlist · " + r.Video.Title
 }
 
 // playThrough starts at the cursor and keeps going. Anything but a video
@@ -970,17 +970,17 @@ func (b *browser) markRow() {
 	watched := !r.Watched
 	if watched {
 		b.state = follow.MarkWatched(b.state, r.Video.ID, b.app.now())
-		// In the queue, being done with something is what takes it out: the
-		// queue is what is still to watch, so a ticked row sitting in it is a
-		// row asking to be removed twice.
-		if b.queued {
-			b.state = follow.Unsave(b.state, r.Video.ID)
+		// On the playlist, being done is what takes a row off it: the list is
+		// what is still to watch, so a ticked row left on it asks to be
+		// removed twice.
+		if b.playlist {
+			b.state = follow.RemoveFromPlaylist(b.state, r.Video.ID)
 		}
 	} else {
 		b.state = follow.Unwatch(b.state, r.Video.ID)
 	}
-	if b.queued {
-		b.show(follow.QueueRows(b.state))
+	if b.playlist {
+		b.show(follow.PlaylistRows(b.state))
 		b.selected = tui.Move(b.selected, 0, len(b.rows))
 	} else {
 		for i := range b.all {
@@ -1067,7 +1067,7 @@ func (b *browser) load(ctx context.Context) error {
 
 	b.state, b.fetched, b.failed, b.stale = state, fetched, failed, stale
 	b.back = nil
-	b.query, b.channels, b.viewing, b.queued = "", false, "", false
+	b.query, b.channels, b.viewing, b.playlist = "", false, "", false
 	b.show(follow.Dashboard(state, fetched, dashboardRows))
 	b.selected = tui.Move(b.selected, 0, len(b.rows))
 	// The dashboard shows everything the feeds carried, so there is no next
@@ -1148,7 +1148,7 @@ func (b *browser) draw() error {
 	cols, rows := tui.ArtBox(width, height, cell)
 	model := tui.Dashboard{
 		Art:         b.picture(context.Background(), cols, rows, cell),
-		Queue:       b.queued,
+		Playlist:    b.playlist,
 		Cell:        cell,
 		Rows:        b.rows,
 		Failed:      b.failedNow(),

@@ -375,67 +375,67 @@ func aVideo(id, title string) media.Video {
 	return media.Video{ID: id, Title: title, Author: "Someone", Duration: 5 * time.Minute}
 }
 
-func TestTheQueueKeepsWhatWasSavedInTheOrderItWasSaved(t *testing.T) {
+func TestThePlaylistKeepsItsOrder(t *testing.T) {
 	now := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
 
-	s := Save(State{}, aVideo("aaaaaaaaaaa", "First"), now)
-	s = Save(s, aVideo("bbbbbbbbbbb", "Second"), now.Add(time.Minute))
+	s := AddToPlaylist(State{}, aVideo("aaaaaaaaaaa", "First"), now)
+	s = AddToPlaylist(s, aVideo("bbbbbbbbbbb", "Second"), now.Add(time.Minute))
 
-	rows := QueueRows(s)
+	rows := PlaylistRows(s)
 	if len(rows) != 2 {
-		t.Fatalf("the queue holds %d rows, want 2", len(rows))
+		t.Fatalf("the playlist holds %d rows, want 2", len(rows))
 	}
 	if rows[0].Video.Title != "First" || rows[1].Video.Title != "Second" {
-		t.Errorf("the queue came back as %q then %q", rows[0].Video.Title, rows[1].Video.Title)
+		t.Errorf("the playlist came back as %q then %q", rows[0].Video.Title, rows[1].Video.Title)
 	}
-	if !s.IsQueued("aaaaaaaaaaa") || s.IsQueued("ccccccccccc") {
-		t.Error("IsQueued does not agree with what was saved")
+	if !s.InPlaylist("aaaaaaaaaaa") || s.InPlaylist("ccccccccccc") {
+		t.Error("InPlaylist does not agree with what was added")
 	}
 }
 
-// Saving something twice must not move it. A list that reorders itself under
+// Adding something twice must not move it. A list that reorders itself under
 // the cursor is one nobody can keep a place in.
-func TestSavingSomethingTwiceChangesNothing(t *testing.T) {
+func TestAddingSomethingTwiceChangesNothing(t *testing.T) {
 	now := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
 
-	s := Save(State{}, aVideo("aaaaaaaaaaa", "First"), now)
-	s = Save(s, aVideo("bbbbbbbbbbb", "Second"), now)
-	again := Save(s, aVideo("aaaaaaaaaaa", "First"), now.Add(time.Hour))
+	s := AddToPlaylist(State{}, aVideo("aaaaaaaaaaa", "First"), now)
+	s = AddToPlaylist(s, aVideo("bbbbbbbbbbb", "Second"), now)
+	again := AddToPlaylist(s, aVideo("aaaaaaaaaaa", "First"), now.Add(time.Hour))
 
-	if len(again.Queue) != 2 {
-		t.Fatalf("saving a second time made %d rows", len(again.Queue))
+	if len(again.Playlist) != 2 {
+		t.Fatalf("adding a second time made %d rows", len(again.Playlist))
 	}
-	if again.Queue[0].ID != "aaaaaaaaaaa" {
-		t.Error("saving something already there moved it")
+	if again.Playlist[0].ID != "aaaaaaaaaaa" {
+		t.Error("adding something already there moved it")
 	}
 }
 
-func TestUnsaveDropsOnlyWhatWasNamed(t *testing.T) {
+func TestRemovingDropsOnlyWhatWasNamed(t *testing.T) {
 	now := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
 
-	s := Save(State{}, aVideo("aaaaaaaaaaa", "First"), now)
-	s = Save(s, aVideo("bbbbbbbbbbb", "Second"), now)
+	s := AddToPlaylist(State{}, aVideo("aaaaaaaaaaa", "First"), now)
+	s = AddToPlaylist(s, aVideo("bbbbbbbbbbb", "Second"), now)
 
-	after := Unsave(s, "aaaaaaaaaaa")
-	if len(after.Queue) != 1 || after.Queue[0].ID != "bbbbbbbbbbb" {
-		t.Errorf("the queue is %v after dropping the first", after.Queue)
+	after := RemoveFromPlaylist(s, "aaaaaaaaaaa")
+	if len(after.Playlist) != 1 || after.Playlist[0].ID != "bbbbbbbbbbb" {
+		t.Errorf("the list is %v after dropping the first", after.Playlist)
 	}
-	if len(s.Queue) != 2 {
-		t.Error("Unsave changed the state it was given; these are values")
+	if len(s.Playlist) != 2 {
+		t.Error("RemoveFromPlaylist changed the state it was given; these are values")
 	}
-	if len(Unsave(s, "ccccccccccc").Queue) != 2 {
-		t.Error("dropping something that was never saved changed the queue")
+	if len(RemoveFromPlaylist(s, "ccccccccccc").Playlist) != 2 {
+		t.Error("dropping something that was never listed changed the list")
 	}
 }
 
-// The queue is what a row was when it was saved, not a pointer into a feed
+// The playlist is what a row was when it was added, not a pointer into a feed
 // that has since rolled past it -- which is the case for a search result,
 // where there is no feed to point into at all.
-func TestAQueuedRowStandsOnItsOwn(t *testing.T) {
+func TestAListedRowStandsOnItsOwn(t *testing.T) {
 	now := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
-	s := Save(State{}, aVideo("aaaaaaaaaaa", "First"), now)
+	s := AddToPlaylist(State{}, aVideo("aaaaaaaaaaa", "First"), now)
 
-	row := QueueRows(s)[0]
+	row := PlaylistRows(s)[0]
 	if row.Video.Title != "First" || row.Channel != "Someone" {
 		t.Errorf("the row lost what it was saved with: %+v", row)
 	}
@@ -447,18 +447,18 @@ func TestAQueuedRowStandsOnItsOwn(t *testing.T) {
 	}
 }
 
-// Watching something does not empty the queue by itself: the tick shows on the
+// Watching something does not empty the playlist by itself: the tick shows on the
 // row, and what removes it is the key that says so.
-func TestAWatchedQueueRowStillShowsAsQueued(t *testing.T) {
+func TestAWatchedRowStillShowsOnThePlaylist(t *testing.T) {
 	now := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
-	s := Save(State{}, aVideo("aaaaaaaaaaa", "First"), now)
+	s := AddToPlaylist(State{}, aVideo("aaaaaaaaaaa", "First"), now)
 	s = MarkWatched(s, "aaaaaaaaaaa", now)
 
-	rows := QueueRows(s)
+	rows := PlaylistRows(s)
 	if len(rows) != 1 {
-		t.Fatalf("the queue holds %d rows, want 1", len(rows))
+		t.Fatalf("the playlist holds %d rows, want 1", len(rows))
 	}
 	if !rows[0].Watched {
-		t.Error("a watched row in the queue carries no tick")
+		t.Error("a watched row on the playlist carries no tick")
 	}
 }

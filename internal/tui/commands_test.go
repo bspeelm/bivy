@@ -122,7 +122,7 @@ func TestMatching(t *testing.T) {
 // when that stops being true.
 func TestEveryCommandEarnsItsPlace(t *testing.T) {
 	// The rare ones: no argument, and not something anyone does repeatedly.
-	rare := map[string]bool{"help": true, "quit": true, "refresh": true, "watched": true, "queue": true}
+	rare := map[string]bool{"help": true, "quit": true, "refresh": true, "watched": true, "playlist": true}
 
 	for _, c := range Commands {
 		if c.Argument == "" && !rare[c.Name] {
@@ -168,7 +168,7 @@ func TestAnUnambiguousPrefixIsTheCommand(t *testing.T) {
 	}{
 		{"q", Quit{}},
 		{"quit", Quit{}},
-		{"que", ShowQueue{}},
+		{"p", ShowPlaylist{}},
 		{"h", ShowHelp{}},
 		{"se cats", Search{Query: "cats"}},
 		{"s cats", Search{Query: "cats"}},
