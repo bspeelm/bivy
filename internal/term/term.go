@@ -54,6 +54,9 @@ func (p Press) IsRune(r rune) bool { return p.Key == KeyRune && p.Rune == r }
 
 // Written out rather than pulled from terminfo: bivy sends five of them, and a
 // dependency to hold five strings is the trade this package exists to refuse.
+// pending is how many keypresses may wait for the loop rather than the tty.
+const pending = 64
+
 const (
 	enterAltScreen = "\x1b[?1049h"
 	leaveAltScreen = "\x1b[?1049l"
@@ -106,7 +109,7 @@ func Open(in, out *os.File) (*Terminal, error) {
 		in:      in,
 		out:     out,
 		state:   state,
-		keys:    make(chan Press),
+		keys:    make(chan Press, pending),
 		resized: make(chan struct{}, 1),
 		closed:  make(chan struct{}),
 	}

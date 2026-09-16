@@ -190,6 +190,21 @@ func (b *browser) run(ctx context.Context) int {
 			if b.handle(ctx, press) {
 				return 0
 			}
+			// Everything already waiting is handled first: drawing one frame
+			// per press is what made the cursor travel on after key-up.
+			for more := true; more; {
+				select {
+				case next, open := <-b.screen.Keys():
+					if !open {
+						return 0
+					}
+					if b.handle(ctx, next) {
+						return 0
+					}
+				default:
+					more = false
+				}
+			}
 
 		case e, open := <-events:
 			if !open {
