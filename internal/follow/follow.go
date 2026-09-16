@@ -41,6 +41,14 @@ type State struct {
 	Watched map[string]time.Time `json:"watched,omitempty"`
 }
 
+// copy carries every field without naming one, so a field added later is not a
+// field six constructors forget.
+func (s State) copy() State {
+	next := s
+	next.Channels = append([]Channel(nil), s.Channels...)
+	return next
+}
+
 // WatchedCap bounds the history: unbounded, this is the one part of bivy that
 // grows for the life of the install. The oldest entries go, so a video watched
 // long ago can appear unwatched again — the right way round, because the
@@ -57,7 +65,8 @@ func MarkWatched(s State, videoID string, now time.Time) State {
 	maps.Copy(watched, s.Watched)
 	watched[videoID] = now.UTC()
 
-	next := State{Channels: append([]Channel(nil), s.Channels...), Watched: watched}
+	next := s.copy()
+	next.Watched = watched
 	next.trimWatched()
 	return next
 }
@@ -74,7 +83,9 @@ func Unwatch(s State, videoID string) State {
 	maps.Copy(watched, s.Watched)
 	delete(watched, videoID)
 
-	return State{Channels: append([]Channel(nil), s.Channels...), Watched: watched}
+	next := s.copy()
+	next.Watched = watched
+	return next
 }
 
 // HasWatched reports whether a video has been watched to its end.
@@ -131,14 +142,16 @@ func (s State) Add(c Channel, now time.Time) (State, error) {
 	// first dashboard, none of them marked.
 	c.LastVisit = now.UTC()
 
-	next := State{Channels: append(append([]Channel(nil), s.Channels...), c), Watched: s.Watched}
+	next := s.copy()
+	next.Channels = append(next.Channels, c)
 	next.sort()
 	return next, nil
 }
 
 // Remove unfollows a channel, reporting whether it was followed at all.
 func (s State) Remove(id string) (State, bool) {
-	next := State{Watched: s.Watched}
+	next := s.copy()
+	next.Channels = nil
 	for _, c := range s.Channels {
 		if c.ID != id {
 			next.Channels = append(next.Channels, c)
@@ -274,7 +287,7 @@ func Visited(s State, fetched []media.Channel, now time.Time) State {
 		seen[ch.ID] = true
 	}
 
-	next := State{Channels: append([]Channel(nil), s.Channels...), Watched: s.Watched}
+	next := s.copy()
 	for i := range next.Channels {
 		if seen[next.Channels[i].ID] {
 			next.Channels[i].LastVisit = now.UTC()
@@ -293,7 +306,7 @@ func Retitle(s State, fetched []media.Channel) State {
 		}
 	}
 
-	next := State{Channels: append([]Channel(nil), s.Channels...), Watched: s.Watched}
+	next := s.copy()
 	for i := range next.Channels {
 		if t, ok := titles[next.Channels[i].ID]; ok {
 			next.Channels[i].Title = t

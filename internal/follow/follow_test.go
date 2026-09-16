@@ -2,6 +2,7 @@ package follow
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -319,5 +320,53 @@ func TestUnwatchingWhatWasNotWatchedChangesNothing(t *testing.T) {
 	after := Unwatch(state, "bbbbbbbbbbb")
 	if len(after.Watched) != len(state.Watched) || !after.HasWatched("aaaaaaaaaaa") {
 		t.Errorf("Unwatch of an unwatched video changed the history: %v", after.Watched)
+	}
+}
+
+// Every call here that returns a changed State used to rebuild it field by
+// field, naming the ones it carried. That makes a field added later a field
+// six of them quietly drop, and nothing would have failed. Each call now
+// copies the whole thing, and this is what says so: set every field, and check
+// none of them vanishes through a call that does not own it.
+func TestAChangedStateCarriesTheFieldsItDoesNotOwn(t *testing.T) {
+	now := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
+	base := State{
+		Channels: []Channel{{ID: "UCaaaaaaaaaaaaaaaaaaaaaa", Title: "Aye", FollowedAt: now, LastVisit: now}},
+		Watched:  map[string]time.Time{"aaaaaaaaaaa": now},
+	}
+
+	for _, tc := range []struct {
+		name  string
+		owns  string
+		apply func(State) State
+	}{
+		{"MarkWatched", "Watched", func(s State) State { return MarkWatched(s, "bbbbbbbbbbb", now) }},
+		{"Unwatch", "Watched", func(s State) State { return Unwatch(s, "aaaaaaaaaaa") }},
+		{"Add", "Channels", func(s State) State {
+			next, err := s.Add(Channel{ID: "UCbbbbbbbbbbbbbbbbbbbbbb", Title: "Bee"}, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return next
+		}},
+		{"Remove", "Channels", func(s State) State { next, _ := s.Remove("UCaaaaaaaaaaaaaaaaaaaaaa"); return next }},
+		{"Visited", "Channels", func(s State) State { return Visited(s, nil, now) }},
+		{"Retitle", "Channels", func(s State) State { return Retitle(s, nil) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := reflect.ValueOf(tc.apply(base))
+			want := reflect.ValueOf(base)
+
+			for i := range got.NumField() {
+				name := got.Type().Field(i).Name
+				if name == tc.owns {
+					continue
+				}
+				if !reflect.DeepEqual(got.Field(i).Interface(), want.Field(i).Interface()) {
+					t.Errorf("%s changed %s, which it does not own: %v became %v",
+						tc.name, name, want.Field(i).Interface(), got.Field(i).Interface())
+				}
+			}
+		})
 	}
 }
