@@ -772,3 +772,30 @@ func TestOnlyANewEnoughMPVIsToldToKeepItsWindow(t *testing.T) {
 		}
 	}
 }
+
+// The first video of a session sizes the window, and mpv sizes it to the
+// video -- so anything at or above the screen's own resolution opened filling
+// it. Measured on a 1920x1080 screen: a 4K video gave a 1920x1080 window
+// without this, and 1344x756 with it.
+func TestTheFirstWindowOpensSmallerThanTheScreen(t *testing.T) {
+	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, true)
+
+	var fit string
+	for _, a := range args {
+		if strings.HasPrefix(a, "--autofit-larger=") {
+			fit = strings.TrimPrefix(a, "--autofit-larger=")
+		}
+	}
+	if fit == "" {
+		t.Fatal("nothing bounds the opening window, so a large video opens filling the screen")
+	}
+	if !strings.HasSuffix(fit, "%") || !strings.Contains(fit, "x") {
+		t.Errorf("the bound is %q; a size in pixels is wrong on every screen but one", fit)
+	}
+
+	// -larger only shrinks. --autofit would stretch a small video's window up
+	// to the same fraction, which is a worse answer than leaving it alone.
+	if contains(args, "--autofit") {
+		t.Error("the bound stretches small windows as well as shrinking large ones")
+	}
+}
