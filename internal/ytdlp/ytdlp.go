@@ -27,9 +27,13 @@ import (
 // control, and a longer silence is a failure to report rather than wait out.
 const searchWait = 45 * time.Second
 
-// MaxResults is the most a single query will ask for. A search is a way to
-// find one video, not a way to page through a service.
-const MaxResults = 30
+// MaxResults is where paging stops. It has to be more than one page, or the
+// first request reaches the ceiling and every later one is clamped back to the
+// rows already on screen.
+const MaxResults = 120
+
+// DefaultResults is one page: a nonsense limit should not cost the ceiling.
+const DefaultResults = 30
 
 // Client runs the extractor.
 type Client struct {
@@ -123,7 +127,10 @@ func SearchTerm(query string, limit int) (string, error) {
 		return "", errors.New("that search is too long")
 	}
 
-	if limit < 1 || limit > MaxResults {
+	switch {
+	case limit < 1:
+		limit = DefaultResults
+	case limit > MaxResults:
 		limit = MaxResults
 	}
 	return "ytsearch" + strconv.Itoa(limit) + ":" + query, nil
@@ -217,7 +224,10 @@ func (c *Client) Channels(ctx context.Context, query string, limit int) ([]media
 	if len(query) > 200 {
 		return nil, errors.New("that search is too long")
 	}
-	if limit < 1 || limit > MaxResults {
+	switch {
+	case limit < 1:
+		limit = DefaultResults
+	case limit > MaxResults:
 		limit = MaxResults
 	}
 
@@ -243,7 +253,10 @@ func (c *Client) Uploads(ctx context.Context, channelID string, limit int) (medi
 	if !media.IsChannelID(channelID) {
 		return media.Channel{}, fmt.Errorf("%q is not a channel identifier", channelID)
 	}
-	if limit < 1 || limit > MaxResults {
+	switch {
+	case limit < 1:
+		limit = DefaultResults
+	case limit > MaxResults:
 		limit = MaxResults
 	}
 

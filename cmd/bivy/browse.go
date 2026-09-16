@@ -821,7 +821,18 @@ func (b *browser) report(e mpv.Event) {
 	if err := b.app.store.WriteJSON(stateFile, b.state); err != nil {
 		b.status = "could not record that as watched: " + err.Error()
 	}
-	b.show(follow.Dashboard(b.state, b.fetched, dashboardRows))
+	// Only the dashboard is rebuilt; a tick is not worth the screen it was
+	// read on. Every other list keeps its rows and marks the one that played.
+	if b.query == "" && b.viewing == "" {
+		b.show(follow.Dashboard(b.state, b.fetched, dashboardRows))
+	} else {
+		for i := range b.all {
+			if b.all[i].Video.ID == b.playing.ID {
+				b.all[i].Watched = true
+			}
+		}
+		b.reshow()
+	}
 	b.playing = media.Video{}
 }
 

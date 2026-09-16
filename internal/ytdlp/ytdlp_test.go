@@ -78,7 +78,7 @@ func TestSearchTermBoundsTheCount(t *testing.T) {
 		{1, "ytsearch1:cats"},
 		{0, "ytsearch30:cats"},
 		{-1, "ytsearch30:cats"},
-		{9999, "ytsearch30:cats"},
+		{9999, "ytsearch120:cats"},
 	} {
 		got, err := SearchTerm("cats", tc.limit)
 		if err != nil {
@@ -354,5 +354,30 @@ func TestASearchLeavesNoJarBehind(t *testing.T) {
 		if strings.HasPrefix(e.Name(), "bivy-") {
 			t.Errorf("a search left %s behind in the temporary directory", e.Name())
 		}
+	}
+}
+
+// The bug this exists to stop coming back: the ceiling was also the size of a
+// page, so the first request already reached it and every "thirty more" was
+// clamped to the same thirty rows. M could not add a row in any view, and the
+// tests did not notice because their stub ignored the limit.
+func TestAskingForASecondPageAsksForMoreThanTheFirst(t *testing.T) {
+	first, err := SearchTerm("cats", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := SearchTerm("cats", 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if first == second {
+		t.Fatalf("both pages asked for %q, so the second can only repeat the first", first)
+	}
+	if second != "ytsearch60:cats" {
+		t.Errorf("the second page asked for %q, want ytsearch60:cats", second)
+	}
+	if MaxResults <= 30 {
+		t.Errorf("MaxResults is %d, which is one page — nothing can page past the first", MaxResults)
 	}
 }

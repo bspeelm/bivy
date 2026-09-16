@@ -454,6 +454,9 @@ func footer(d Dashboard, width int) string {
 // part of the screen a new user reads as instructions.
 func hints(d Dashboard) string {
 	switch {
+	case d.Busy:
+		// Nothing would be true: fetching holds the loop, so no key is read.
+		return ""
 	case len(d.Rows) == 0 && d.Query != "":
 		return noResults
 	case len(d.Rows) == 0:

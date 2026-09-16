@@ -47,7 +47,8 @@ nothing playing
 ```
 
 Enter on a channel row opens it and lists its videos; `esc` goes back one
-screen. `M` loads thirty more of whatever you are looking at.
+screen. `M` loads thirty more of whatever you are looking at, up to a hundred
+and twenty.
 
 A dot marks anything posted since you last looked and a tick anything you have
 watched. bivy sets that tick when a video plays to its end, and `m` sets or

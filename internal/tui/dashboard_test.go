@@ -772,3 +772,25 @@ func TestArtBoxWithoutACellSize(t *testing.T) {
 		t.Errorf("ArtBox with no cell size gave %dx%d", cols, rows)
 	}
 }
+
+// The heading and the hints are read together, and while something is being
+// fetched they disagreed: "searching for …" above, "no results, search again"
+// below. Nothing is offered instead, because fetching holds the loop and no
+// key would work anyway.
+func TestNothingIsOfferedWhileSomethingIsStillArriving(t *testing.T) {
+	for _, d := range []Dashboard{
+		{Query: "cats", Busy: true, Interactive: true},
+		{Viewing: "Aye", Busy: true, Interactive: true},
+		{Busy: true, Interactive: true},
+	} {
+		if got := hints(d); got != "" {
+			t.Errorf("hints while busy = %q, want nothing offered", got)
+		}
+	}
+
+	// And the hints come back once it has arrived.
+	settled := Dashboard{Query: "cats", Interactive: true, Rows: []follow.Row{videoRow("Someone", "A result", time.Hour, false)}}
+	if hints(settled) == "" {
+		t.Error("the hints stayed empty after the search returned")
+	}
+}
