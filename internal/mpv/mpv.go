@@ -30,9 +30,12 @@ import (
 // and --vo=gpu in 0.29.0, and the later of the two is the floor.
 const Minimum = "0.29.0"
 
+// openAtMost is how much of the screen a window may take when it first opens.
+// A fraction, because a number in pixels is wrong on every screen but one.
+const openAtMost = "70%x70%"
+
 // keepsWindowSince is when mpv learned to leave its window alone. Older ones
-// refuse to start at all on an option they do not know, so this is asked
-// rather than assumed.
+// refuse to start on an option they do not know, so this is asked not assumed.
 const keepsWindowSince = "0.36.0"
 
 const (
@@ -234,6 +237,9 @@ func flags(socket, cookies string, keepWindow bool) []string {
 		// bivy owns the terminal, and mpv writing status lines into the
 		// screen bivy is drawing is the most visible way this goes wrong.
 		"--terminal=no",
+		// Only shrinks. Without it the session's first video sizes the window
+		// to itself, and anything at the screen's resolution opens filling it.
+		"--autofit-larger=" + openAtMost,
 		// One invented visitor, replaced before every video (ADR-016).
 		"--ytdl-raw-options=cookies=" + cookies,
 	}
@@ -247,9 +253,8 @@ func flags(socket, cookies string, keepWindow bool) []string {
 }
 
 // keepsWindow reports whether this mpv understands being told not to resize
-// its own window. An mpv handed an option it does not know exits without
-// starting, and bivy supports back to 0.29.0 — so a version it cannot read is
-// treated as one that cannot.
+// its own window. A version that cannot be read is treated as one that cannot,
+// because the cost of guessing wrong is a player that will not start.
 func keepsWindow(ctx context.Context, binary string) bool {
 	v, err := Version(ctx, binary)
 	if err != nil || v == "" {
