@@ -1,8 +1,11 @@
 package follow
 
 import (
+	"encoding/json"
 	"errors"
+	"maps"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -460,5 +463,51 @@ func TestAWatchedRowStillShowsOnThePlaylist(t *testing.T) {
 	}
 	if !rows[0].Watched {
 		t.Error("a watched row on the playlist carries no tick")
+	}
+}
+
+// The state file is the only thing bivy keeps between sessions, and renaming a
+// field in it is not a compile error. Go drops a JSON key it does not know on
+// read and then writes the file back without it, so the rename lands as a list
+// quietly emptied on somebody's next launch -- which is exactly what happened
+// to the playlist when it was briefly called a queue.
+//
+// This pins the names on disk. Changing one now means changing this test,
+// which is the moment to ask what happens to the files that already exist.
+func TestTheStateFileKeepsItsShape(t *testing.T) {
+	now := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
+
+	populated := State{
+		Channels: []Channel{{ID: "UCaaaaaaaaaaaaaaaaaaaaaa", Title: "Aye", FollowedAt: now, LastVisit: now}},
+		Watched:  map[string]time.Time{"aaaaaaaaaaa": now},
+	}
+	populated = AddToPlaylist(populated, media.Video{
+		ID: "bbbbbbbbbbb", Title: "Two", Author: "Someone",
+		ChannelID: "UCaaaaaaaaaaaaaaaaaaaaaa", Published: now, Duration: time.Minute,
+	}, now)
+
+	raw, err := json.Marshal(populated)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var shape map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &shape); err != nil {
+		t.Fatal(err)
+	}
+	keys := slices.Sorted(maps.Keys(shape))
+	if want := []string{"channels", "playlist", "watched"}; !slices.Equal(keys, want) {
+		t.Errorf("the state file's keys are %v, want %v — renaming one empties it for anyone whose file has the old name", keys, want)
+	}
+
+	// The same for a row inside the playlist, which is where the detail is.
+	var entries []map[string]json.RawMessage
+	if err := json.Unmarshal(shape["playlist"], &entries); err != nil {
+		t.Fatal(err)
+	}
+	inner := slices.Sorted(maps.Keys(entries[0]))
+	want := []string{"author", "channel_id", "duration", "id", "published", "saved_at", "title"}
+	if !slices.Equal(inner, want) {
+		t.Errorf("a playlist entry's keys are %v, want %v", inner, want)
 	}
 }
