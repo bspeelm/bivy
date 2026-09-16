@@ -51,8 +51,9 @@ type Client struct {
 
 	// Where requests go. Fields rather than constants so the tests can point
 	// them at a local server without a seam in the production path.
-	FeedBase string
-	PageBase string
+	FeedBase  string
+	PageBase  string
+	ThumbBase string
 }
 
 // New returns a Client with the timeouts bivy is willing to wait.
@@ -141,10 +142,15 @@ func (c *Client) Thumbnail(ctx context.Context, videoID string) ([]byte, error) 
 		return nil, fmt.Errorf("%q is not a video identifier", videoID)
 	}
 
+	// One attempt each, unlike everything else here: a picture is cosmetic,
+	// and the first address 404s by design when the larger size was never made.
 	var err error
 	for _, target := range targets {
+		if c.ThumbBase != "" {
+			target = c.ThumbBase + strings.TrimPrefix(target, media.ThumbnailHost)
+		}
 		var body string
-		if body, err = c.get(ctx, target, maxImageBytes); err == nil {
+		if body, err = c.attempt(ctx, target, maxImageBytes); err == nil {
 			return []byte(body), nil
 		}
 	}

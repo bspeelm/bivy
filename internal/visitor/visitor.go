@@ -1,7 +1,6 @@
 // Package visitor invents the identifier the service counts requests by, one
-// per request and thrown away after it. A value kept between requests would be
-// the durable identifier this exists to avoid, and what the service writes back
-// beside it is discarded too. ADR-016 has the evidence and the cost.
+// per request and thrown away after it -- a value kept between requests would
+// be the durable identifier this exists to avoid. ADR-016 has the cost.
 package visitor
 
 import (

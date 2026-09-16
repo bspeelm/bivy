@@ -2135,3 +2135,47 @@ func TestFinishingAVideoDoesNotThrowAwayTheSearch(t *testing.T) {
 	}
 	b.quit(t)
 }
+
+// Holding a key queues presses faster than frames can be drawn. Drawing one
+// frame each is what made the cursor go on travelling after the key came up,
+// and no test could see it: the fake screen's channel is buffered and its
+// picture source returns instantly, so production's back-pressure never
+// appeared here.
+func TestABurstOfPressesDrawsFewerFramesThanPresses(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	before := b.screen.frameCount()
+
+	const presses = 20
+	burst := make([]term.Press, 0, presses)
+	for i := 0; i < presses; i++ {
+		burst = append(burst, named(term.KeyDown))
+	}
+	b.screen.press(burst...)
+
+	// Settled when the frame count has stopped moving, not after a fixed
+	// wait: the point is what the loop did, not how fast this machine is.
+	last, still := -1, 0
+	deadline := time.After(5 * time.Second)
+	for still < 10 {
+		select {
+		case <-deadline:
+			t.Fatal("the screen never stopped redrawing")
+		case <-time.After(5 * time.Millisecond):
+		}
+		if n := b.screen.frameCount(); n == last {
+			still++
+			continue
+		} else {
+			last, still = n, 0
+		}
+	}
+	b.quit(t)
+
+	if drawn := last - before; drawn >= presses {
+		t.Errorf("%d presses drew %d frames; nothing is draining the queue", presses, drawn)
+	}
+}

@@ -36,6 +36,10 @@ func TestDecodeKey(t *testing.T) {
 		{"home, the long spelling", "\x1b[1~", Press{Key: KeyHome}, 4},
 		{"end, the long spelling", "\x1b[4~", Press{Key: KeyEnd}, 4},
 		{"a sequence with no meaning here", "\x1b[5~", Press{}, 4},
+		{"the wheel, up", "\x1b[<64;10;5M", Press{Key: KeyUp}, 11},
+		{"the wheel, down", "\x1b[<65;10;5M", Press{Key: KeyDown}, 11},
+		{"a click, which the list has no use for", "\x1b[<0;10;5M", Press{}, 10},
+		{"the release that follows it", "\x1b[<0;10;5m", Press{}, 10},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, used := DecodeKey([]byte(tc.in))
@@ -167,6 +171,7 @@ func TestTheEscapeSequencesArePaired(t *testing.T) {
 		{enterAltScreen, leaveAltScreen},
 		{hideCursor, showCursor},
 		{noAutoWrap, autoWrap},
+		{enableMouse, disableMouse},
 	} {
 		if pair[0] == pair[1] {
 			t.Errorf("%q is its own inverse, which it is not", pair[0])
@@ -244,5 +249,38 @@ func TestDrawClearsEachLineBeforeWritingIt(t *testing.T) {
 	}
 	if strings.Contains(got, "first"+clearLine) {
 		t.Error("a line is cleared after its text, which leaves anything to its left")
+	}
+}
+
+// A wheel notch is one row. Without mouse reporting the terminal answers a
+// notch with three arrow keys of its own, which is three rows and is not what
+// the notch meant -- so bivy asks to hear the mouse itself.
+func TestTheWheelIsOneRow(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want Key
+	}{
+		{"up", "\x1b[<64;1;1M", KeyUp},
+		{"down", "\x1b[<65;1;1M", KeyDown},
+		{"up, far across a wide window", "\x1b[<64;238;61M", KeyUp},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, used := DecodeKey([]byte(tc.in))
+			if got.Key != tc.want {
+				t.Errorf("DecodeKey(%q) = %+v, want %v", tc.in, got, tc.want)
+			}
+			if used != len(tc.in) {
+				t.Errorf("consumed %d of %d bytes", used, len(tc.in))
+			}
+		})
+	}
+}
+
+// A report split across reads must wait for the rest, or its tail is typed
+// into whatever is listening.
+func TestAnUnfinishedMouseReportWaits(t *testing.T) {
+	if _, used := DecodeKey([]byte("\x1b[<64;10")); used != 0 {
+		t.Errorf("half a mouse report consumed %d bytes, want it to wait", used)
 	}
 }

@@ -36,14 +36,15 @@ func (v Video) URL() string { return "https://www.youtube.com/watch?v=" + v.ID }
 // hq720 is widescreen, and the shape a video actually is. hqdefault is
 // four-by-three with bars painted top and bottom, and a third of the
 // resolution — the fallback, because older videos have only that one.
+const ThumbnailHost = "https://i.ytimg.com/vi/"
+
 func ThumbnailURLs(videoID string) []string {
 	if !IsVideoID(videoID) {
 		return nil
 	}
-	const host = "https://i.ytimg.com/vi/"
 	return []string{
-		host + videoID + "/hq720.jpg",
-		host + videoID + "/hqdefault.jpg",
+		ThumbnailHost + videoID + "/hq720.jpg",
+		ThumbnailHost + videoID + "/hqdefault.jpg",
 	}
 }
 

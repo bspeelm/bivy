@@ -24,6 +24,7 @@ func against(t *testing.T, h http.HandlerFunc) *Client {
 	c := New()
 	c.FeedBase = srv.URL + "/feeds/videos.xml"
 	c.PageBase = srv.URL
+	c.ThumbBase = srv.URL + "/vi/"
 	return c
 }
 
@@ -385,5 +386,33 @@ func TestThumbnailRefusesSomethingThatIsNotAVideo(t *testing.T) {
 	}
 	if reached {
 		t.Error("a malformed identifier reached the network")
+	}
+}
+
+// A picture is fetched while somebody is moving the cursor, so the time it
+// takes is time the list is not moving. The first address 404s whenever the
+// larger size was never made, which is why there is a second one -- and
+// retrying that 404 three times with backoff was a second of waiting spent to
+// be told the same thing twice more.
+func TestAMissingThumbnailFallsStraightThroughToTheOtherAddress(t *testing.T) {
+	var asked []string
+	c := against(t, func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		if strings.Contains(r.URL.Path, "hq720") {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte("a picture"))
+	})
+
+	got, err := c.Thumbnail(context.Background(), "aaaaaaaaaaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "a picture" {
+		t.Errorf("got %q, want the fallback picture", got)
+	}
+	if len(asked) != 2 {
+		t.Errorf("the host was asked %d times for %v; want one try each", len(asked), asked)
 	}
 }
