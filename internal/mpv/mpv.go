@@ -30,6 +30,11 @@ import (
 // and --vo=gpu in 0.29.0, and the later of the two is the floor.
 const Minimum = "0.29.0"
 
+// keepsWindowSince is when mpv learned to leave its window alone. Older ones
+// refuse to start at all on an option they do not know, so this is asked
+// rather than assumed.
+const keepsWindowSince = "0.36.0"
+
 const (
 	dirPerm   fs.FileMode = 0o700
 	startWait             = 10 * time.Second
@@ -158,7 +163,7 @@ func Start(ctx context.Context, opt Options) (*Player, error) {
 		return nil, err
 	}
 
-	args := append(append([]string(nil), opt.Args...), flags(socket, cookies)...)
+	args := append(append([]string(nil), opt.Args...), flags(socket, cookies, keepsWindow(ctx, binary))...)
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = opt.Env
 	// Streams left nil, which exec connects to the null device: mpv's own
@@ -214,8 +219,8 @@ func Start(ctx context.Context, opt Options) (*Player, error) {
 // sitting there for the whole session, including after every video ends. On a
 // compositor that offers no decorations it has no title bar to close it by
 // either, so it is a pane the user cannot get rid of and did not ask for.
-func flags(socket, cookies string) []string {
-	return []string{
+func flags(socket, cookies string, keepWindow bool) []string {
+	base := []string{
 		// ADR-006: the user's own mpv setup is neither read nor written.
 		"--no-config",
 		// Wait for something to play instead of exiting, so one process
@@ -232,6 +237,25 @@ func flags(socket, cookies string) []string {
 		// One invented visitor, replaced before every video (ADR-016).
 		"--ytdl-raw-options=cookies=" + cookies,
 	}
+
+	// One window serves the whole session, so the size its watcher chose
+	// outlives the video they chose it during.
+	if keepWindow {
+		return append(base, "--auto-window-resize=no")
+	}
+	return base
+}
+
+// keepsWindow reports whether this mpv understands being told not to resize
+// its own window. An mpv handed an option it does not know exits without
+// starting, and bivy supports back to 0.29.0 — so a version it cannot read is
+// treated as one that cannot.
+func keepsWindow(ctx context.Context, binary string) bool {
+	v, err := Version(ctx, binary)
+	if err != nil || v == "" {
+		return false
+	}
+	return !OlderThan(v, keepsWindowSince)
 }
 
 func runtimeDir(override string) string {

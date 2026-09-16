@@ -313,7 +313,7 @@ func TestPlayRefusesAVideoThatIsNotOne(t *testing.T) {
 
 // The socket carries what the user is watching, and argv is world-readable.
 func TestNothingUserControlledReachesTheArgv(t *testing.T) {
-	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/cookies.txt")
+	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/cookies.txt", true)
 
 	for _, a := range args {
 		if !strings.HasPrefix(a, "--") {
@@ -339,7 +339,7 @@ func TestNothingUserControlledReachesTheArgv(t *testing.T) {
 // desktop before this test existed — and on a compositor that offers no
 // decorations they have no title bar to close them by.
 func TestAnIdlePlayerPutsNoWindowUp(t *testing.T) {
-	if contains(flags("/run/somewhere/mpv.sock", "/run/somewhere/cookies.txt"), "--force-window") {
+	if contains(flags("/run/somewhere/mpv.sock", "/run/somewhere/cookies.txt", true), "--force-window") {
 		t.Error("bivy forces a window, which means an empty one whenever nothing is playing")
 	}
 }
@@ -713,7 +713,7 @@ func TestTheJarGoesWithTheSocketDirectory(t *testing.T) {
 // The cookie mpv is pointed at must be the one bivy owns and replaces, not a
 // path it inherited from somewhere.
 func TestTheCookieFlagPointsAtTheJarBivyWrote(t *testing.T) {
-	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName)
+	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, true)
 
 	var found bool
 	for _, a := range args {
@@ -726,5 +726,49 @@ func TestTheCookieFlagPointsAtTheJarBivyWrote(t *testing.T) {
 	}
 	if !found {
 		t.Error("mpv is given no cookie, and the service refuses an extractor without one")
+	}
+}
+
+// One mpv serves the whole session, so a window resized by hand should be
+// resized once. Left to itself mpv fits the window to each new video, which
+// undoes that on the next one -- and the window is the thing being watched.
+//
+// The option arrived in mpv 0.36.0 and bivy supports back to 0.29.0. An mpv
+// handed an option it does not know exits without starting, so an older one
+// must not be given it: a lost window size is a preference, a player that
+// will not launch is the program.
+func TestTheWindowKeepsTheSizeItWasGiven(t *testing.T) {
+	const flag = "--auto-window-resize=no"
+
+	kept := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, true)
+	if !contains(kept, flag) {
+		t.Error("mpv is left to resize its own window, so each video undoes the last size")
+	}
+
+	old := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, false)
+	if contains(old, flag) {
+		t.Errorf("%s reaches an mpv too old for it, which is an mpv that will not start", flag)
+	}
+	// Everything else is the same either way.
+	if len(kept) != len(old)+1 {
+		t.Errorf("the two flag sets differ by more than the one option: %v vs %v", kept, old)
+	}
+}
+
+// The gate itself, at the boundary it names.
+func TestOnlyANewEnoughMPVIsToldToKeepItsWindow(t *testing.T) {
+	for _, tc := range []struct {
+		version string
+		want    bool
+	}{
+		{"0.36.0", true},
+		{"0.41.0", true},
+		{"0.35.1", false},
+		{"0.29.0", false},
+		{"", false},
+	} {
+		if got := tc.version != "" && !OlderThan(tc.version, keepsWindowSince); got != tc.want {
+			t.Errorf("mpv %q told to keep its window = %v, want %v", tc.version, got, tc.want)
+		}
 	}
 }
