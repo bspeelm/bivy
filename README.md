@@ -50,6 +50,10 @@ Enter on a channel row opens it and lists its videos; `esc` goes back one
 screen. `M` loads thirty more of whatever you are looking at, until the
 service runs out of things to give.
 
+The mouse wheel moves one row a notch. bivy asks the terminal to report the
+wheel, which means click-dragging inside its window no longer selects text —
+hold shift while dragging and it does.
+
 A dot marks anything posted since you last looked and a tick anything you have
 watched. bivy sets that tick when a video plays to its end, and `m` sets or
 clears it by hand — for something watched elsewhere, or put down on purpose. What is being chosen sits on the left; what is known about it is

@@ -71,6 +71,11 @@ const (
 	autoWrap   = "\x1b[?7h"
 	clearLine  = "\x1b[K"
 	clearBelow = "\x1b[J"
+	// Mouse reporting, in SGR form so a column past 223 still fits. Asked for
+	// because the terminal otherwise answers a wheel notch with three arrow
+	// keys, and three rows is not what a notch means.
+	enableMouse  = "\x1b[?1000h\x1b[?1006h"
+	disableMouse = "\x1b[?1006l\x1b[?1000l"
 )
 
 // Terminal is a terminal in raw mode, on the alternate screen.
@@ -114,7 +119,7 @@ func Open(in, out *os.File) (*Terminal, error) {
 		closed:  make(chan struct{}),
 	}
 
-	if _, err := io.WriteString(out, enterAltScreen+hideCursor+noAutoWrap); err != nil {
+	if _, err := io.WriteString(out, enterAltScreen+hideCursor+noAutoWrap+enableMouse); err != nil {
 		_ = t.Close()
 		return nil, err
 	}
@@ -155,7 +160,7 @@ func (t *Terminal) Close() error {
 	if t.graphics == graphics.Kitty {
 		_, _ = io.WriteString(t.out, graphics.Clear)
 	}
-	_, _ = io.WriteString(t.out, autoWrap+showCursor+leaveAltScreen)
+	_, _ = io.WriteString(t.out, disableMouse+autoWrap+showCursor+leaveAltScreen)
 	if t.state == nil {
 		return nil
 	}
@@ -339,6 +344,10 @@ func decodeEscape(b []byte) (Press, int) {
 		return Press{}, 0
 	}
 
+	if b[1] == '[' && b[2] == '<' {
+		return decodeMouse(b)
+	}
+
 	switch b[2] {
 	case 'A':
 		return Press{Key: KeyUp}, 3
@@ -370,4 +379,24 @@ func decodeEscape(b []byte) (Press, int) {
 		return Press{}, 0
 	}
 	return Press{}, 3
+}
+
+// decodeMouse reads an SGR mouse report: CSI < button ; column ; row, ending in
+// M or m. Only the wheel means anything to a list; every other button is
+// consumed and reported as nothing, so a click cannot type into a search box.
+func decodeMouse(b []byte) (Press, int) {
+	for i := 3; i < len(b); i++ {
+		if b[i] != 'M' && b[i] != 'm' {
+			continue
+		}
+		button, _, _ := strings.Cut(string(b[3:i]), ";")
+		switch button {
+		case "64":
+			return Press{Key: KeyUp}, i + 1
+		case "65":
+			return Press{Key: KeyDown}, i + 1
+		}
+		return Press{}, i + 1
+	}
+	return Press{}, 0
 }
