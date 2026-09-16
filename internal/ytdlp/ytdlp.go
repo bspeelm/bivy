@@ -27,8 +27,8 @@ import (
 // control, and a longer silence is a failure to report rather than wait out.
 const searchWait = 45 * time.Second
 
-// DefaultResults is one page, and only what a nonsense limit gets: there is no
-// ceiling, because the service stops yielding long before anything else would.
+// DefaultResults is one page, and only what a nonsense limit gets: the service
+// stops yielding long before any ceiling here would.
 const DefaultResults = 30
 
 // Client runs the extractor.
