@@ -27,6 +27,8 @@ type (
 	Refresh struct{}
 	// HideWatched hides the videos already watched, or brings them back.
 	HideWatched struct{}
+	// ShowQueue lists what has been saved to watch later.
+	ShowQueue struct{}
 	// ShowHelp lists the commands.
 	ShowHelp struct{}
 	// Quit ends the session.
@@ -39,7 +41,11 @@ type Command struct {
 	Summary string
 	// Argument names what follows, and is empty for commands that take none.
 	Argument string
-	run      func(arg string) (Intent, error)
+	// Short is a spelling that beats prefix matching. One command has one,
+	// because ":q" is what quitting is and a command that made it ambiguous
+	// would be taking the most-used thing on the line away from it.
+	Short string
+	run   func(arg string) (Intent, error)
 }
 
 // Commands is every command, in the order the completion list shows them.
@@ -109,6 +115,11 @@ var Commands = []Command{
 		run:     func(string) (Intent, error) { return Refresh{}, nil },
 	},
 	{
+		Name:    "queue",
+		Summary: "what you have saved for later, oldest first",
+		run:     func(string) (Intent, error) { return ShowQueue{}, nil },
+	},
+	{
 		Name:    "watched",
 		Summary: "hide the videos you have watched, or show them again",
 		run:     func(string) (Intent, error) { return HideWatched{}, nil },
@@ -120,6 +131,7 @@ var Commands = []Command{
 	},
 	{
 		Name:    "quit",
+		Short:   "q",
 		Summary: "leave",
 		run:     func(string) (Intent, error) { return Quit{}, nil },
 	},
@@ -204,6 +216,12 @@ func Matching(line string) []Command {
 		return nil
 	}
 
+	// A short spelling settles it rather than joining the list: the point of
+	// having one is that it is not a prefix of anything.
+	if c, found := lookup(name); found && c.Short == name {
+		return []Command{c}
+	}
+
 	var out []Command
 	for _, c := range Commands {
 		if strings.HasPrefix(c.Name, name) {
@@ -215,7 +233,7 @@ func Matching(line string) []Command {
 
 func lookup(name string) (Command, bool) {
 	for _, c := range Commands {
-		if c.Name == name {
+		if c.Name == name || (c.Short != "" && c.Short == name) {
 			return c, true
 		}
 	}

@@ -2,6 +2,7 @@ package follow
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -319,5 +320,145 @@ func TestUnwatchingWhatWasNotWatchedChangesNothing(t *testing.T) {
 	after := Unwatch(state, "bbbbbbbbbbb")
 	if len(after.Watched) != len(state.Watched) || !after.HasWatched("aaaaaaaaaaa") {
 		t.Errorf("Unwatch of an unwatched video changed the history: %v", after.Watched)
+	}
+}
+
+// Every call here that returns a changed State used to rebuild it field by
+// field, naming the ones it carried. That makes a field added later a field
+// six of them quietly drop, and nothing would have failed. Each call now
+// copies the whole thing, and this is what says so: set every field, and check
+// none of them vanishes through a call that does not own it.
+func TestAChangedStateCarriesTheFieldsItDoesNotOwn(t *testing.T) {
+	now := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
+	base := State{
+		Channels: []Channel{{ID: "UCaaaaaaaaaaaaaaaaaaaaaa", Title: "Aye", FollowedAt: now, LastVisit: now}},
+		Watched:  map[string]time.Time{"aaaaaaaaaaa": now},
+	}
+
+	for _, tc := range []struct {
+		name  string
+		owns  string
+		apply func(State) State
+	}{
+		{"MarkWatched", "Watched", func(s State) State { return MarkWatched(s, "bbbbbbbbbbb", now) }},
+		{"Unwatch", "Watched", func(s State) State { return Unwatch(s, "aaaaaaaaaaa") }},
+		{"Add", "Channels", func(s State) State {
+			next, err := s.Add(Channel{ID: "UCbbbbbbbbbbbbbbbbbbbbbb", Title: "Bee"}, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return next
+		}},
+		{"Remove", "Channels", func(s State) State { next, _ := s.Remove("UCaaaaaaaaaaaaaaaaaaaaaa"); return next }},
+		{"Visited", "Channels", func(s State) State { return Visited(s, nil, now) }},
+		{"Retitle", "Channels", func(s State) State { return Retitle(s, nil) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := reflect.ValueOf(tc.apply(base))
+			want := reflect.ValueOf(base)
+
+			for i := range got.NumField() {
+				name := got.Type().Field(i).Name
+				if name == tc.owns {
+					continue
+				}
+				if !reflect.DeepEqual(got.Field(i).Interface(), want.Field(i).Interface()) {
+					t.Errorf("%s changed %s, which it does not own: %v became %v",
+						tc.name, name, want.Field(i).Interface(), got.Field(i).Interface())
+				}
+			}
+		})
+	}
+}
+
+func aVideo(id, title string) media.Video {
+	return media.Video{ID: id, Title: title, Author: "Someone", Duration: 5 * time.Minute}
+}
+
+func TestTheQueueKeepsWhatWasSavedInTheOrderItWasSaved(t *testing.T) {
+	now := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
+
+	s := Save(State{}, aVideo("aaaaaaaaaaa", "First"), now)
+	s = Save(s, aVideo("bbbbbbbbbbb", "Second"), now.Add(time.Minute))
+
+	rows := QueueRows(s)
+	if len(rows) != 2 {
+		t.Fatalf("the queue holds %d rows, want 2", len(rows))
+	}
+	if rows[0].Video.Title != "First" || rows[1].Video.Title != "Second" {
+		t.Errorf("the queue came back as %q then %q", rows[0].Video.Title, rows[1].Video.Title)
+	}
+	if !s.IsQueued("aaaaaaaaaaa") || s.IsQueued("ccccccccccc") {
+		t.Error("IsQueued does not agree with what was saved")
+	}
+}
+
+// Saving something twice must not move it. A list that reorders itself under
+// the cursor is one nobody can keep a place in.
+func TestSavingSomethingTwiceChangesNothing(t *testing.T) {
+	now := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
+
+	s := Save(State{}, aVideo("aaaaaaaaaaa", "First"), now)
+	s = Save(s, aVideo("bbbbbbbbbbb", "Second"), now)
+	again := Save(s, aVideo("aaaaaaaaaaa", "First"), now.Add(time.Hour))
+
+	if len(again.Queue) != 2 {
+		t.Fatalf("saving a second time made %d rows", len(again.Queue))
+	}
+	if again.Queue[0].ID != "aaaaaaaaaaa" {
+		t.Error("saving something already there moved it")
+	}
+}
+
+func TestUnsaveDropsOnlyWhatWasNamed(t *testing.T) {
+	now := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
+
+	s := Save(State{}, aVideo("aaaaaaaaaaa", "First"), now)
+	s = Save(s, aVideo("bbbbbbbbbbb", "Second"), now)
+
+	after := Unsave(s, "aaaaaaaaaaa")
+	if len(after.Queue) != 1 || after.Queue[0].ID != "bbbbbbbbbbb" {
+		t.Errorf("the queue is %v after dropping the first", after.Queue)
+	}
+	if len(s.Queue) != 2 {
+		t.Error("Unsave changed the state it was given; these are values")
+	}
+	if len(Unsave(s, "ccccccccccc").Queue) != 2 {
+		t.Error("dropping something that was never saved changed the queue")
+	}
+}
+
+// The queue is what a row was when it was saved, not a pointer into a feed
+// that has since rolled past it -- which is the case for a search result,
+// where there is no feed to point into at all.
+func TestAQueuedRowStandsOnItsOwn(t *testing.T) {
+	now := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
+	s := Save(State{}, aVideo("aaaaaaaaaaa", "First"), now)
+
+	row := QueueRows(s)[0]
+	if row.Video.Title != "First" || row.Channel != "Someone" {
+		t.Errorf("the row lost what it was saved with: %+v", row)
+	}
+	if row.Video.Duration != 5*time.Minute {
+		t.Errorf("the row lost its duration: %v", row.Video.Duration)
+	}
+	if row.Video.Thumbnail == "" {
+		t.Error("the row has no picture to draw")
+	}
+}
+
+// Watching something does not empty the queue by itself: the tick shows on the
+// row, and what removes it is the key that says so.
+func TestAWatchedQueueRowStillShowsAsQueued(t *testing.T) {
+	now := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
+	s := Save(State{}, aVideo("aaaaaaaaaaa", "First"), now)
+	s = MarkWatched(s, "aaaaaaaaaaa", now)
+
+	rows := QueueRows(s)
+	if len(rows) != 1 {
+		t.Fatalf("the queue holds %d rows, want 1", len(rows))
+	}
+	if !rows[0].Watched {
+		t.Error("a watched row in the queue carries no tick")
 	}
 }

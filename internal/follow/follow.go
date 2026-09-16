@@ -39,6 +39,100 @@ type State struct {
 	// Watched is when each video was watched to its end. A map so that asking
 	// about one is a lookup rather than a scan of everything ever seen.
 	Watched map[string]time.Time `json:"watched,omitempty"`
+	// Queue is what has been saved to watch later, oldest first.
+	Queue []Queued `json:"queue,omitempty"`
+}
+
+// Queued is a video kept for later. Stored rather than pointed at: a search
+// result belongs to no feed, and a feed has rolled past its own oldest entries
+// by the time anyone comes back to them.
+type Queued struct {
+	ID        string        `json:"id"`
+	Title     string        `json:"title"`
+	Author    string        `json:"author,omitempty"`
+	ChannelID string        `json:"channel_id,omitempty"`
+	Published time.Time     `json:"published,omitempty"`
+	Duration  time.Duration `json:"duration,omitempty"`
+	SavedAt   time.Time     `json:"saved_at"`
+}
+
+// copy carries every field without naming one, so a field added later is not a
+// field six constructors forget.
+func (s State) copy() State {
+	next := s
+	next.Channels = append([]Channel(nil), s.Channels...)
+	next.Queue = append([]Queued(nil), s.Queue...)
+	return next
+}
+
+// Save keeps a video for later, at the end of the queue. Saving one already
+// there changes nothing: the queue is a set that remembers an order, and
+// moving a row because it was pressed twice is a list nobody can keep a place
+// in.
+func Save(s State, v media.Video, now time.Time) State {
+	if !media.IsVideoID(v.ID) || s.IsQueued(v.ID) {
+		return s
+	}
+
+	next := s.copy()
+	next.Queue = append(next.Queue, Queued{
+		ID:        v.ID,
+		Title:     v.Title,
+		Author:    v.Author,
+		ChannelID: v.ChannelID,
+		Published: v.Published,
+		Duration:  v.Duration,
+		SavedAt:   now.UTC(),
+	})
+	return next
+}
+
+// Unsave drops a video from the queue, whether it was there or not.
+func Unsave(s State, videoID string) State {
+	if !s.IsQueued(videoID) {
+		return s
+	}
+
+	next := s.copy()
+	next.Queue = next.Queue[:0]
+	for _, q := range s.Queue {
+		if q.ID != videoID {
+			next.Queue = append(next.Queue, q)
+		}
+	}
+	return next
+}
+
+// IsQueued reports whether a video is waiting to be watched.
+func (s State) IsQueued(videoID string) bool {
+	for _, q := range s.Queue {
+		if q.ID == videoID {
+			return true
+		}
+	}
+	return false
+}
+
+// QueueRows is the queue as rows, in the order it was saved.
+func QueueRows(s State) []Row {
+	rows := make([]Row, 0, len(s.Queue))
+	for _, q := range s.Queue {
+		rows = append(rows, Row{
+			Video: media.Video{
+				ID:        q.ID,
+				Title:     q.Title,
+				Author:    q.Author,
+				ChannelID: q.ChannelID,
+				Published: q.Published,
+				Duration:  q.Duration,
+				Thumbnail: media.ThumbnailURL(q.ID),
+			},
+			Channel:   q.Author,
+			ChannelID: q.ChannelID,
+			Watched:   s.HasWatched(q.ID),
+		})
+	}
+	return rows
 }
 
 // WatchedCap bounds the history: unbounded, this is the one part of bivy that
@@ -57,7 +151,8 @@ func MarkWatched(s State, videoID string, now time.Time) State {
 	maps.Copy(watched, s.Watched)
 	watched[videoID] = now.UTC()
 
-	next := State{Channels: append([]Channel(nil), s.Channels...), Watched: watched}
+	next := s.copy()
+	next.Watched = watched
 	next.trimWatched()
 	return next
 }
@@ -74,7 +169,9 @@ func Unwatch(s State, videoID string) State {
 	maps.Copy(watched, s.Watched)
 	delete(watched, videoID)
 
-	return State{Channels: append([]Channel(nil), s.Channels...), Watched: watched}
+	next := s.copy()
+	next.Watched = watched
+	return next
 }
 
 // HasWatched reports whether a video has been watched to its end.
@@ -131,14 +228,16 @@ func (s State) Add(c Channel, now time.Time) (State, error) {
 	// first dashboard, none of them marked.
 	c.LastVisit = now.UTC()
 
-	next := State{Channels: append(append([]Channel(nil), s.Channels...), c), Watched: s.Watched}
+	next := s.copy()
+	next.Channels = append(next.Channels, c)
 	next.sort()
 	return next, nil
 }
 
 // Remove unfollows a channel, reporting whether it was followed at all.
 func (s State) Remove(id string) (State, bool) {
-	next := State{Watched: s.Watched}
+	next := s.copy()
+	next.Channels = nil
 	for _, c := range s.Channels {
 		if c.ID != id {
 			next.Channels = append(next.Channels, c)
@@ -274,7 +373,7 @@ func Visited(s State, fetched []media.Channel, now time.Time) State {
 		seen[ch.ID] = true
 	}
 
-	next := State{Channels: append([]Channel(nil), s.Channels...), Watched: s.Watched}
+	next := s.copy()
 	for i := range next.Channels {
 		if seen[next.Channels[i].ID] {
 			next.Channels[i].LastVisit = now.UTC()
@@ -293,7 +392,7 @@ func Retitle(s State, fetched []media.Channel) State {
 		}
 	}
 
-	next := State{Channels: append([]Channel(nil), s.Channels...), Watched: s.Watched}
+	next := s.copy()
 	for i := range next.Channels {
 		if t, ok := titles[next.Channels[i].ID]; ok {
 			next.Channels[i].Title = t
