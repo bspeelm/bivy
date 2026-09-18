@@ -827,6 +827,11 @@ func (b *browser) play(ctx context.Context) {
 // seconds has not been watched, and a program that says otherwise is keeping a
 // record of something that did not happen.
 func (b *browser) report(ctx context.Context, e mpv.Event) {
+	// Nothing else would show it: a video with no decoder plays as sound.
+	if e.Name == mpv.Complaint {
+		b.status = tidy(e.Detail)
+		return
+	}
 	if e.Name != "end-file" {
 		return
 	}
