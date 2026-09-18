@@ -125,6 +125,14 @@ func TestStandInProcess(t *testing.T) {
 			if behaviour == "stopped-early" {
 				_ = encoder.Encode(map[string]any{"event": "end-file", "reason": "quit"})
 			}
+			if behaviour == "complains-mid-playback" {
+				// A decoder that will not start. Playback carries on with
+				// what is left, so no end-file ever arrives.
+				_ = encoder.Encode(map[string]any{
+					"event": "log-message", "prefix": "vd",
+					"level": "error", "text": "Failed to initialize a decoder for codec 'h264'.\n",
+				})
+			}
 			if behaviour == "refused-by-the-service" {
 				// A real refusal, in the order a real one arrives: the cause,
 				// then two consequences, then a file_error that names a
@@ -797,5 +805,34 @@ func TestTheFirstWindowOpensSmallerThanTheScreen(t *testing.T) {
 	// to the same fraction, which is a worse answer than leaving it alone.
 	if contains(args, "--autofit") {
 		t.Error("the bound stretches small windows as well as shrinking large ones")
+	}
+}
+
+// A video whose decoder will not start plays as sound in an empty window, and
+// mpv says so once, at error level, while playback carries on. No end-file
+// ever arrives, so without this nothing would ever reach a screen.
+func TestSomethingSaidWhilePlaybackCarriesOnIsStillReported(t *testing.T) {
+	p := start(t, "complains-mid-playback")
+	if err := p.Play(aVideo()); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case e, open := <-p.Events():
+			if !open {
+				t.Fatal("the player went away without complaining")
+			}
+			if e.Name != Complaint {
+				continue
+			}
+			if !strings.Contains(e.Detail, "decoder") {
+				t.Errorf("the complaint said %q, want what mpv actually said", e.Detail)
+			}
+			return
+		case <-deadline:
+			t.Fatal("mpv complained and nothing was reported")
+		}
 	}
 }

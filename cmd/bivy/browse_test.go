@@ -2395,3 +2395,24 @@ func TestPlayingThroughFromTheLastRowOfAFeedStops(t *testing.T) {
 		t.Errorf("played %d videos from the last row; want one, got %v", len(got), got)
 	}
 }
+
+// The failure that took twenty minutes to find by hand: a host with no h264
+// decoder plays a video as sound in an empty window. mpv says so at error
+// level and then carries on, so no end-file ever arrives and nothing reached
+// the screen -- playback that half worked looked like playback.
+func TestADecoderThatWillNotStartReachesTheStatusLine(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "playing ·")
+
+	b.player.events <- mpv.Event{
+		Name:   mpv.Complaint,
+		Detail: "Failed to initialize a decoder for codec 'h264'.",
+	}
+	b.eventually(t, "Failed to initialize a decoder for codec 'h264'.")
+	b.quit(t)
+}

@@ -54,6 +54,10 @@ const (
 	maxSocketPath = 100
 )
 
+// Complaint carries something mpv said while playback carried on. No end-file
+// arrives for these: a video with no decoder plays as sound and looks fine.
+const Complaint = "complaint"
+
 // Event is something mpv reported.
 type Event struct {
 	Name string
@@ -429,6 +433,12 @@ func (p *Player) read() {
 
 		if r.Event == "log-message" {
 			p.remember(r)
+			if text := strings.TrimSpace(r.Text); text != "" {
+				select {
+				case p.events <- Event{Name: Complaint, Detail: text}:
+				default:
+				}
+			}
 			continue
 		}
 		if r.Event == "start-file" {
