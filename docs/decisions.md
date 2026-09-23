@@ -943,3 +943,82 @@ it already says what the video is.
 request free, which would make the two-stage fetch pointless rather than
 merely unnecessary.
 
+---
+
+## ADR-020 — Whether the User-Agent should stop naming bivy
+
+**Status:** proposed. Nothing in the code changes until this is decided; the
+header is unchanged in the branches that prompted it.
+
+`internal/feed` sends `bivy (+https://github.com/bspeelm/bivy)` on every
+request it makes. This record weighs changing that and recommends nothing be
+changed yet.
+
+### What it actually covers
+
+Less than it appears to. bivy's own header goes on feed fetches and the one
+channel-page fetch in ADR-008 — the quiet, static half of what bivy does.
+Search, channel listing and playback go through the extractor and mpv, which
+send their own and are not bivy's to set. So this header is the fingerprint on
+the launch path and nowhere else, and changing it would leave the loudest
+traffic identified exactly as it is now.
+
+### The case for changing it
+
+Behind a VPN the reasoning inverts. The exit address is shared, so the address
+stops distinguishing one person's traffic from another's — and a header no
+other client sends becomes the thing that does. A unique string is a stable
+selector for one user's requests among everyone on that exit, which is the
+opposite of what running behind a VPN is for.
+
+It also makes bivy's traffic trivially separable as a class. Refusing it costs
+the service one rule.
+
+### The case against
+
+Three things, and the third is the one that decides it.
+
+**It is honest, and the honesty is the project's whole posture.** A client that
+names itself and links to its source is the convention for a non-browser client
+that wants to be identifiable and blockable. Everything else here is built so a
+stranger can check a claim rather than believe it; a header that says something
+untrue about what is making the request is a poor fit for that.
+
+**Sending a browser's string is worse than sending nothing.** A header claiming
+to be a browser, from a client whose TLS handshake, header order and HTTP/2
+settings are Go's, is a mismatch — and mismatches are a stronger bot signal
+than an honest non-browser header. This would be reaching for the shape that
+got the address blocked, not away from it.
+
+**It is a workaround aimed at a control rather than at a request pattern.**
+The branches this came from fixed things bivy was doing wrong: retrying a
+refusal, bursting, generating 404s. Those were defects. A header change fixes
+nothing bivy is doing wrong; it is the first step of pretending to be something
+else, and the argument that would justify it — "the service cannot tell, so it
+does not matter" — is available for much worse.
+
+### What is on the table
+
+| option | what it costs |
+|---|---|
+| keep it | one selector for bivy's feed traffic on a shared exit |
+| drop the header | Go's default string, which is equally distinctive and less honest about it |
+| a generic non-browser string | slightly less unique, still not a browser, and no longer says what to block |
+| a browser's string | a mismatched fingerprint, and a claim that is not true |
+| make it configurable | the decision moves to whoever runs it, and the default still has to be chosen |
+
+### The recommendation
+
+Keep it, and revisit only if the header is shown to be what is being refused.
+The exposure it creates is real but narrow: it covers the launch path, and on a
+shared exit the extractor's traffic is identifiable as an extractor whatever
+this header says. Spending the project's honesty to half-hide half the traffic
+is a poor trade.
+
+If it is changed, the generic non-browser string is the only option here worth
+taking. It is the one that reduces uniqueness without asserting anything false.
+
+**What would decide this:** evidence that requests carrying this header are
+refused where the same request without it is not, which is measurable and has
+not been measured.
+
