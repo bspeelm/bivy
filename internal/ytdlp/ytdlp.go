@@ -28,6 +28,10 @@ import (
 // control, and a longer silence is a failure to report rather than wait out.
 const searchWait = 45 * time.Second
 
+// sleepRequests is what the extractor waits between its own requests, of which
+// it makes several per listing (ADR-017). Seconds, the unit the flag takes.
+const sleepRequests = "1"
+
 // DefaultResults is one page, and only what a nonsense limit gets: the service
 // stops yielding long before any ceiling here would.
 const DefaultResults = 30
@@ -96,6 +100,7 @@ func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 		"--no-warnings",
 		"--ignore-config",
 		"--no-playlist",
+		"--sleep-requests", sleepRequests,
 		"--cookies", cookies,
 	}, args...)...)
 

@@ -160,29 +160,32 @@ var channelIDIn = []*regexp.Regexp{
 
 var handleShape = regexp.MustCompile(`^@[A-Za-z0-9._-]{1,60}$`)
 
-// Thumbnail fetches a video's picture. Here rather than in the package that
-// draws it, because this is the only package that may import net/http (§0).
-// The address is derived from the identifier, never taken from a feed, so a
-// hostile feed cannot aim this request.
+// Thumbnail fetches the picture every video has. Here rather than in the
+// package that draws it, because this is the only package that may import
+// net/http (§0).
 func (c *Client) Thumbnail(ctx context.Context, videoID string) ([]byte, error) {
-	targets := media.ThumbnailURLs(videoID)
-	if len(targets) == 0 {
+	return c.picture(ctx, media.ThumbnailURL(videoID), videoID)
+}
+
+// WideThumbnail fetches the widescreen picture, which older videos 404 for.
+func (c *Client) WideThumbnail(ctx context.Context, videoID string) ([]byte, error) {
+	return c.picture(ctx, media.WideThumbnailURL(videoID), videoID)
+}
+
+// picture is one attempt: a picture is cosmetic, and a row the cursor has
+// left is not worth a second ask.
+func (c *Client) picture(ctx context.Context, target, videoID string) ([]byte, error) {
+	if target == "" {
 		return nil, fmt.Errorf("%q is not a video identifier", videoID)
 	}
-
-	// One attempt each, unlike everything else here: a picture is cosmetic,
-	// and the first address 404s by design when the larger size was never made.
-	var err error
-	for _, target := range targets {
-		if c.ThumbBase != "" {
-			target = c.ThumbBase + strings.TrimPrefix(target, media.ThumbnailHost)
-		}
-		var body string
-		if body, err = c.attempt(ctx, target, maxImageBytes); err == nil {
-			return []byte(body), nil
-		}
+	if c.ThumbBase != "" {
+		target = c.ThumbBase + strings.TrimPrefix(target, media.ThumbnailHost)
 	}
-	return nil, err
+	body, err := c.attempt(ctx, target, maxImageBytes)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(body), nil
 }
 
 // Resolve turns a handle into the channel identifier its feed is keyed by. The

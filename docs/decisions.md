@@ -872,3 +872,74 @@ is the thing that links a session rather than the address.
 all, which makes the whole mechanism dead code and it should go. Or evidence
 that a session-long visitor is itself what gets an address challenged, which
 would mean the cookie buys nothing and the same deletion follows.
+
+---
+
+## ADR-019 — A picture waits for the cursor to stop, and the size that always exists is asked for first
+
+**Status:** accepted. It paces what ADR-007 and ADR-012 already scoped, and
+changes neither.
+
+ADR-012 settled that bivy draws one picture, for the row under the cursor.
+ADR-007 settled that pictures are never written to disk. Both still hold. This
+is about when the request is made and which address it goes to.
+
+### What prompted it
+
+Two things in the thumbnail path made more requests than the feature needed,
+and both were on the interactive path where nobody was counting.
+
+The fetch happened inside the draw, and the draw happens on every keypress. So
+holding an arrow key down sent a request for every row the cursor travelled
+past — a burst of requests for pictures nobody saw, at exactly the rate the
+key repeats.
+
+And the widescreen address was asked for first. Older videos never had that
+size and answer 404, so every older row cost a guaranteed 404 before the real
+request. A run of 404s across sequential identifiers from one address is what
+scanning looks like.
+
+### The decision
+
+A row is fetched when the cursor has held still on it for 250ms, and the fetch
+happens off the draw path, with the result carried back into the loop that owns
+the browser. Scrolling past a row costs nothing at all.
+
+The size every video has is asked for first, so a row costs one request and no
+404. The widescreen size is a second request, made only once the first picture
+is already on screen — so it is paid for by rows somebody is actually looking
+at, and never by rows being scrolled through.
+
+A video that turns out to have no widescreen size is recorded as having been
+asked, so it is asked once and not every time the cursor returns to it.
+
+### The argument against
+
+Pictures appear later than they used to. Settling on a row now costs a quarter
+of a second before anything is fetched, and the good picture arrives after the
+adequate one rather than instead of it. For someone moving deliberately down a
+short list, this is strictly slower than what it replaces.
+
+That is true, and it is the trade. The quarter-second is spent only once per
+row somebody stopped on, where before it was spent on every row they passed —
+and the version that felt instant is the version that got an address blocked.
+A picture that arrives a moment late is a cost the person can see. A request
+pattern that gets the whole network refused is one they cannot.
+
+### What survives it
+
+Nothing about what is kept. Pictures still live in memory for the session and
+are gone when it ends, still bounded, and still written nowhere — ADR-007 is
+untouched, and there is still no cache directory. One picture is still drawn,
+for one row, which is ADR-012.
+
+### What it costs, said on screen
+
+Nothing is said on screen. A picture that has not arrived yet is an empty box,
+which is what it was before while the request was in flight, and the row beside
+it already says what the video is.
+
+**What would reopen this:** a terminal protocol or a host that makes the second
+request free, which would make the two-stage fetch pointless rather than
+merely unnecessary.
+

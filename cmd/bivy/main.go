@@ -50,6 +50,7 @@ type fetcher interface {
 	Fetch(ctx context.Context, channelID string) (media.Channel, error)
 	Resolve(ctx context.Context, handle string) (string, error)
 	Thumbnail(ctx context.Context, videoID string) ([]byte, error)
+	WideThumbnail(ctx context.Context, videoID string) ([]byte, error)
 }
 
 type app struct {
@@ -71,8 +72,12 @@ type app struct {
 	// draw. Nothing else in the program changes when it is.
 	art artist
 
-	// gap is the wait between extractor fallbacks; a field so tests skip it.
-	gap time.Duration
+	// gap is the wait between extractor fallbacks, spread the jitter before a
+	// feed fetch, settle the pause before a row's picture. Fields so that
+	// tests need not sit through any of them.
+	gap    time.Duration
+	spread time.Duration
+	settle time.Duration
 
 	// gate is shut for the rest of the session once the service pushes back.
 	// One gate for everything: a refusal to the extractor is a refusal to the
@@ -100,6 +105,8 @@ func main() {
 		search:    search,
 		gate:      gate,
 		gap:       fallbackGap,
+		spread:    feedSpread,
+		settle:    thumbnailSettle,
 		now:       time.Now,
 		out:       os.Stdout,
 		errOut:    os.Stderr,
@@ -223,10 +230,15 @@ const fallbackChannels = 3
 // requests do not arrive as a burst on a fixed rhythm.
 const fallbackGap = time.Second
 
-// fetchAll asks every followed channel's feed, at most four at a time: a
-// follow list is allowed to be long, and forty simultaneous requests is a
-// different program's network behaviour. Failures are collected rather than
-// returned, so one unreachable channel does not cost the dashboard.
+// feedSpread is the most a feed fetch waits first: two at a time is already
+// far from a burst, and the jitter keeps them off a fixed rhythm.
+const feedSpread = 250 * time.Millisecond
+
+// fetchAll asks every followed channel's feed, two at a time and spread out: a
+// follow list is allowed to be long, and a burst of simultaneous requests from
+// one address is the shape that gets it scored (ADR-017). Failures are
+// collected rather than returned, so one unreachable channel does not cost the
+// dashboard.
 func (a *app) fetchAll(ctx context.Context, state follow.State) (fetched []media.Channel, failed []string, stale bool) {
 	if len(state.Channels) == 0 {
 		return nil, nil, false
@@ -236,7 +248,7 @@ func (a *app) fetchAll(ctx context.Context, state follow.State) (fetched []media
 	errs := make([]error, len(state.Channels))
 	viaExtractor := make([]bool, len(state.Channels))
 
-	const parallel = 4
+	const parallel = 2
 	sem := make(chan struct{}, parallel)
 	var wg sync.WaitGroup
 
@@ -247,6 +259,13 @@ func (a *app) fetchAll(ctx context.Context, state follow.State) (fetched []media
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
+			if a.spread > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(rand.N(a.spread)):
+				}
+			}
 			results[i], errs[i] = a.feeds.Fetch(ctx, c.ID)
 		}()
 	}

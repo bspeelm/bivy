@@ -58,6 +58,10 @@ func (s *stubFeeds) Fetch(_ context.Context, id string) (media.Channel, error) {
 	return ch, nil
 }
 
+func (s *stubFeeds) WideThumbnail(ctx context.Context, videoID string) ([]byte, error) {
+	return s.Thumbnail(ctx, videoID)
+}
+
 // setChannel replaces a channel's feed while bivy may be reading it.
 func (s *stubFeeds) setChannel(id string, ch media.Channel) {
 	s.mu.Lock()
