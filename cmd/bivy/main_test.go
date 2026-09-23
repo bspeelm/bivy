@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/bspeelm/bivy/internal/follow"
 	"github.com/bspeelm/bivy/internal/media"
+	"github.com/bspeelm/bivy/internal/pushback"
 	"github.com/bspeelm/bivy/internal/store"
 	"github.com/bspeelm/bivy/internal/tui"
 )
@@ -54,6 +56,10 @@ func (s *stubFeeds) Fetch(_ context.Context, id string) (media.Channel, error) {
 		return media.Channel{}, errors.New("no such channel")
 	}
 	return ch, nil
+}
+
+func (s *stubFeeds) WideThumbnail(ctx context.Context, videoID string) ([]byte, error) {
+	return s.Thumbnail(ctx, videoID)
 }
 
 // setChannel replaces a channel's feed while bivy may be reading it.
@@ -555,4 +561,119 @@ func hintLine(t *testing.T, frame string) string {
 	}
 	t.Fatal("the rendered screen has no lines")
 	return ""
+}
+
+// following builds a state of n channels, so a launch can be tested at the
+// size where pacing is the whole question.
+func following(n int) follow.State {
+	var s follow.State
+	for i := range n {
+		s.Channels = append(s.Channels, follow.Channel{
+			ID:    fmt.Sprintf("UCchannel%014d", i),
+			Title: fmt.Sprintf("Channel %d", i),
+		})
+	}
+	return s
+}
+
+// uploadsAsked is the channels the extractor was asked to list, in order.
+func uploadsAsked(s *stubSearch) []string {
+	var asked []string
+	for _, q := range s.queries() {
+		if after, found := strings.CutPrefix(q, "uploads:"); found {
+			asked = append(asked, after)
+		}
+	}
+	return asked
+}
+
+// A feed service having a bad morning used to turn a quiet launch into one
+// browser-page fetch per followed channel. That is the request pattern that
+// got an address blocked, so the fallback is bounded (ADR-017).
+func TestTheExtractorFallbackIsCapped(t *testing.T) {
+	h := newHarness(t)
+	finder := &stubSearch{uploads: map[string]media.Channel{}}
+	state := following(20)
+	for _, c := range state.Channels {
+		finder.uploads[c.ID] = media.Channel{ID: c.ID, Videos: []media.Video{{ID: "aaaaaaaaaaa"}}}
+	}
+	h.feeds.fail(errors.New("the feed service is having a bad morning"))
+	h.app.search = finder
+
+	fetched, failed, stale := h.app.fetchAll(context.Background(), state)
+
+	if asked := uploadsAsked(finder); len(asked) != fallbackChannels {
+		t.Errorf("asked the extractor about %d channels, want %d", len(asked), fallbackChannels)
+	}
+	if len(fetched) != fallbackChannels {
+		t.Errorf("%d channels came back, want the %d the cap allows", len(fetched), fallbackChannels)
+	}
+	// The rest are unreachable, which is what the dashboard already says
+	// about a channel it could not read.
+	if want := len(state.Channels) - fallbackChannels; len(failed) != want {
+		t.Errorf("%d channels reported unreachable, want %d", len(failed), want)
+	}
+	if !stale {
+		t.Error("rows from the extractor were not marked stale")
+	}
+}
+
+// Sequential and spaced, not four at once: the pause is the point, and a test
+// that only counted requests would pass on a burst of three.
+func TestTheExtractorFallbackIsPaced(t *testing.T) {
+	h := newHarness(t)
+	finder := &stubSearch{uploads: map[string]media.Channel{}}
+	state := following(fallbackChannels)
+	for _, c := range state.Channels {
+		finder.uploads[c.ID] = media.Channel{ID: c.ID, Videos: []media.Video{{ID: "aaaaaaaaaaa"}}}
+	}
+	h.feeds.fail(errors.New("no feeds today"))
+	h.app.search = finder
+
+	const gap = 20 * time.Millisecond
+	h.app.gap = gap
+
+	started := time.Now()
+	h.app.fetchAll(context.Background(), state)
+	elapsed := time.Since(started)
+
+	// One pause fewer than there are requests, and the jitter only adds.
+	if want := time.Duration(fallbackChannels-1) * gap; elapsed < want {
+		t.Errorf("asked %d channels in %s, want at least %s of pacing", fallbackChannels, elapsed, want)
+	}
+}
+
+// Once the service has said stop, the fallback is exactly the thing not to do:
+// it is the most scraper-shaped request bivy makes.
+func TestNoFallbackOnceTheGateIsShut(t *testing.T) {
+	h := newHarness(t)
+	finder := &stubSearch{uploads: map[string]media.Channel{}}
+	h.feeds.fail(errors.New("no feeds today"))
+	h.app.search = finder
+	h.app.gate = &pushback.Gate{}
+	h.app.gate.Trip(pushback.RateLimited)
+
+	_, failed, _ := h.app.fetchAll(context.Background(), following(5))
+
+	if asked := uploadsAsked(finder); len(asked) != 0 {
+		t.Errorf("asked the extractor about %v after the gate shut, want nothing", asked)
+	}
+	if len(failed) != 5 {
+		t.Errorf("%d channels reported unreachable, want all 5", len(failed))
+	}
+}
+
+// The status line has to say so, or a dashboard that has quietly stopped
+// refreshing looks like one where nothing has been posted.
+func TestTheDashboardSaysWhenTheServiceHasPushedBack(t *testing.T) {
+	h := newHarness(t)
+	h.app.gate = &pushback.Gate{}
+	h.app.gate.Trip(pushback.RateLimited)
+
+	h.run(t, "follow", chanA)
+	got := h.run(t, "list-only")
+
+	if !strings.Contains(got, "stopped making requests") {
+		t.Errorf("the dashboard does not say the service pushed back:\n%s", got)
+	}
 }

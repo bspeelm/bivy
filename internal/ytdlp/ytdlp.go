@@ -20,12 +20,17 @@ import (
 	"time"
 
 	"github.com/bspeelm/bivy/internal/media"
+	"github.com/bspeelm/bivy/internal/pushback"
 	"github.com/bspeelm/bivy/internal/visitor"
 )
 
 // searchWait bounds a query: the extractor talks to a service bivy does not
 // control, and a longer silence is a failure to report rather than wait out.
 const searchWait = 45 * time.Second
+
+// sleepRequests is what the extractor waits between its own requests, of which
+// it makes several per listing (ADR-017). Seconds, the unit the flag takes.
+const sleepRequests = "1"
 
 // DefaultResults is one page, and only what a nonsense limit gets: the service
 // stops yielding long before any ceiling here would.
@@ -35,6 +40,9 @@ const DefaultResults = 30
 type Client struct {
 	// Binary is the extractor to run. Empty means "yt-dlp", found on PATH.
 	Binary string
+
+	// Gate records the service having pushed back; a nil gate never shuts.
+	Gate *pushback.Gate
 }
 
 func New() *Client { return &Client{} }
@@ -62,6 +70,10 @@ func (c *Client) Search(ctx context.Context, query string, limit int) ([]media.V
 // Every argument before the caller's is a literal written here; the caller
 // supplies only what follows, already checked.
 func (c *Client) run(ctx context.Context, args ...string) (string, error) {
+	if err := c.Gate.Err(); err != nil {
+		return "", err
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, searchWait)
 	defer cancel()
 
@@ -70,7 +82,7 @@ func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 		binary = "yt-dlp"
 	}
 
-	// A visitor for this search and no other, gone when it returns (ADR-016).
+	// The session's visitor, in a directory gone when the search returns.
 	dir, err := os.MkdirTemp("", "bivy-")
 	if err != nil {
 		return "", fmt.Errorf("making a place for the visitor cookie: %w", err)
@@ -88,6 +100,7 @@ func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 		"--no-warnings",
 		"--ignore-config",
 		"--no-playlist",
+		"--sleep-requests", sleepRequests,
 		"--cookies", cookies,
 	}, args...)...)
 
@@ -102,6 +115,12 @@ func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 		}
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("the search took longer than %s", searchWait)
+		}
+		// The extractor is where a challenge is seen first: it asks for the
+		// page bivy never fetches itself, and says so on stderr.
+		if reason, pushing := pushback.Detect(stderr.String()); pushing {
+			c.Gate.Trip(reason)
+			return "", pushback.ErrStopped
 		}
 		return "", fmt.Errorf("the search failed: %s", firstLine(stderr.String(), err))
 	}

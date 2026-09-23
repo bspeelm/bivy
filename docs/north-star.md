@@ -31,10 +31,11 @@ and removable without residue.
 
 Concretely, and each of these is a test rather than an aspiration:
 
-- **Nothing identifies the user.** No account, no API key, no identifier bivy
-  invents and keeps — the visitor cookie the extractor carries is invented per
-  request and thrown away with it. One package touches the network, so a
-  stranger can check that claim rather than believe it.
+- **Nothing identifies the user.** No account, no API key, no identifier that
+  outlives the session — the visitor cookie the extractor carries is invented
+  at startup and gone when bivy exits, so nothing ties one session to the next.
+  One package touches the network, so a stranger can check that claim rather
+  than believe it.
 - **No residue.** Two directories, listed in the plan's §8, and nothing else
   ever. The isolation suite runs a first launch against a scratch home
   directory and asserts the write set matches that list exactly. No cache, no

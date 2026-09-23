@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/url"
 	"os"
 	"os/signal"
@@ -19,6 +20,7 @@ import (
 	"github.com/bspeelm/bivy/internal/feed"
 	"github.com/bspeelm/bivy/internal/follow"
 	"github.com/bspeelm/bivy/internal/media"
+	"github.com/bspeelm/bivy/internal/pushback"
 	"github.com/bspeelm/bivy/internal/store"
 	"github.com/bspeelm/bivy/internal/tui"
 	"github.com/bspeelm/bivy/internal/ytdlp"
@@ -48,6 +50,7 @@ type fetcher interface {
 	Fetch(ctx context.Context, channelID string) (media.Channel, error)
 	Resolve(ctx context.Context, handle string) (string, error)
 	Thumbnail(ctx context.Context, videoID string) ([]byte, error)
+	WideThumbnail(ctx context.Context, videoID string) ([]byte, error)
 }
 
 type app struct {
@@ -68,6 +71,18 @@ type app struct {
 	// art fetches and draws thumbnails, and is nil where the terminal cannot
 	// draw. Nothing else in the program changes when it is.
 	art artist
+
+	// gap is the wait between extractor fallbacks, spread the jitter before a
+	// feed fetch, settle the pause before a row's picture. Fields so that
+	// tests need not sit through any of them.
+	gap    time.Duration
+	spread time.Duration
+	settle time.Duration
+
+	// gate is shut for the rest of the session once the service pushes back.
+	// One gate for everything: a refusal to the extractor is a refusal to the
+	// feeds as well (ADR-017).
+	gate *pushback.Gate
 }
 
 func main() {
@@ -80,10 +95,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	gate := &pushback.Gate{}
+	feeds, search := feed.New(), ytdlp.New()
+	feeds.Gate, search.Gate = gate, gate
+
 	a := &app{
 		store:     s,
-		feeds:     feed.New(),
-		search:    ytdlp.New(),
+		feeds:     feeds,
+		search:    search,
+		gate:      gate,
+		gap:       fallbackGap,
+		spread:    feedSpread,
+		settle:    thumbnailSettle,
 		now:       time.Now,
 		out:       os.Stdout,
 		errOut:    os.Stderr,
@@ -176,6 +199,7 @@ func (a *app) dashboard(ctx context.Context) int {
 	fmt.Fprint(a.out, tui.Render(tui.Dashboard{
 		Rows:   rows,
 		Failed: failed,
+		Status: a.gate.Says(),
 		Now:    a.now(),
 		Width:  a.width,
 	}))
@@ -197,10 +221,24 @@ func (a *app) dashboard(ctx context.Context) int {
 	return 0
 }
 
-// fetchAll asks every followed channel's feed, at most four at a time: a
-// follow list is allowed to be long, and forty simultaneous requests is a
-// different program's network behaviour. Failures are collected rather than
-// returned, so one unreachable channel does not cost the dashboard.
+// fallbackChannels caps how many channels one launch asks the extractor about.
+// The rest are reported unreachable, which is what the dashboard already says
+// about a channel it could not read.
+const fallbackChannels = 3
+
+// fallbackGap is the wait between those, with as much again in jitter, so the
+// requests do not arrive as a burst on a fixed rhythm.
+const fallbackGap = time.Second
+
+// feedSpread is the most a feed fetch waits first: two at a time is already
+// far from a burst, and the jitter keeps them off a fixed rhythm.
+const feedSpread = 250 * time.Millisecond
+
+// fetchAll asks every followed channel's feed, two at a time and spread out: a
+// follow list is allowed to be long, and a burst of simultaneous requests from
+// one address is the shape that gets it scored (ADR-017). Failures are
+// collected rather than returned, so one unreachable channel does not cost the
+// dashboard.
 func (a *app) fetchAll(ctx context.Context, state follow.State) (fetched []media.Channel, failed []string, stale bool) {
 	if len(state.Channels) == 0 {
 		return nil, nil, false
@@ -210,7 +248,7 @@ func (a *app) fetchAll(ctx context.Context, state follow.State) (fetched []media
 	errs := make([]error, len(state.Channels))
 	viaExtractor := make([]bool, len(state.Channels))
 
-	const parallel = 4
+	const parallel = 2
 	sem := make(chan struct{}, parallel)
 	var wg sync.WaitGroup
 
@@ -221,19 +259,19 @@ func (a *app) fetchAll(ctx context.Context, state follow.State) (fetched []media
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
+			if a.spread > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(rand.N(a.spread)):
+				}
+			}
 			results[i], errs[i] = a.feeds.Fetch(ctx, c.ID)
-			if errs[i] == nil || a.search == nil {
-				return
-			}
-			// The feed would not answer. Asking the extractor instead costs
-			// the publish times, and the alternative is showing nothing at
-			// all (ADR-013).
-			if ch, err := a.search.Uploads(ctx, c.ID, dashboardRows); err == nil && len(ch.Videos) > 0 {
-				results[i], errs[i], viaExtractor[i] = ch, nil, true
-			}
 		}()
 	}
 	wg.Wait()
+
+	a.fillFromExtractor(ctx, state, results, errs, viaExtractor)
 
 	for i, c := range state.Channels {
 		if errs[i] != nil {
@@ -251,6 +289,38 @@ func (a *app) fetchAll(ctx context.Context, state follow.State) (fetched []media
 	}
 	sort.Strings(failed)
 	return fetched, failed, stale
+}
+
+// fillFromExtractor asks the extractor about the channels whose feed would not
+// answer: one at a time, with a pause between, and only the first few. An
+// empty dashboard is worse than a stale one (ADR-013); a browser-page fetch
+// per channel at every launch is what got an address blocked (ADR-017).
+func (a *app) fillFromExtractor(ctx context.Context, state follow.State, results []media.Channel, errs []error, viaExtractor []bool) {
+	if a.search == nil {
+		return
+	}
+
+	asked := 0
+	for i, c := range state.Channels {
+		if errs[i] == nil {
+			continue
+		}
+		if asked == fallbackChannels || a.gate.Shut() {
+			return
+		}
+		if asked > 0 && a.gap > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(a.gap + rand.N(a.gap)):
+			}
+		}
+		asked++
+
+		if ch, err := a.search.Uploads(ctx, c.ID, dashboardRows); err == nil && len(ch.Videos) > 0 {
+			results[i], errs[i], viaExtractor[i] = ch, nil, true
+		}
+	}
 }
 
 func (a *app) follow(ctx context.Context, argument string) int {

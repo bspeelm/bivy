@@ -2,13 +2,16 @@ package feed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bspeelm/bivy/internal/media"
+	"github.com/bspeelm/bivy/internal/pushback"
 )
 
 const testChannel = "UCabcdefghijklmnopqrstuv"
@@ -22,6 +25,7 @@ func against(t *testing.T, h http.HandlerFunc) *Client {
 	t.Cleanup(srv.Close)
 
 	c := New()
+	c.Gate = &pushback.Gate{}
 	c.FeedBase = srv.URL + "/feeds/videos.xml"
 	c.PageBase = srv.URL
 	c.ThumbBase = srv.URL + "/vi/"
@@ -258,40 +262,35 @@ func TestFetchHonoursACancelledContext(t *testing.T) {
 	}
 }
 
-// The feed endpoint answers 404 or 500 to roughly four requests in ten,
-// intermittently, for channels that answer 200 on the next attempt. One
-// attempt makes following a channel a coin toss.
-func TestATransientFailureIsRetried(t *testing.T) {
-	for _, status := range []int{http.StatusNotFound, http.StatusInternalServerError, http.StatusTooManyRequests} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
-			var calls int
-			c := against(t, func(w http.ResponseWriter, _ *http.Request) {
-				calls++
-				if calls < 3 {
-					http.Error(w, "not this time", status)
-					return
-				}
-				fmt.Fprint(w, sampleFeed)
-			})
+// The feed endpoint answers 5xx intermittently for channels that answer 200
+// on the next attempt, so the one retry is worth having.
+func TestAServerErrorIsRetriedOnce(t *testing.T) {
+	var calls int
+	c := against(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls < 2 {
+			http.Error(w, "not this time", http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprint(w, sampleFeed)
+	})
 
-			ch, err := c.Fetch(context.Background(), testChannel)
-			if err != nil {
-				t.Fatalf("gave up after %d attempts: %v", calls, err)
-			}
-			if len(ch.Videos) != 2 {
-				t.Errorf("%d entries, want the feed that finally arrived", len(ch.Videos))
-			}
-		})
+	ch, err := c.Fetch(context.Background(), testChannel)
+	if err != nil {
+		t.Fatalf("gave up after %d attempts: %v", calls, err)
+	}
+	if len(ch.Videos) != 2 {
+		t.Errorf("%d entries, want the feed that finally arrived", len(ch.Videos))
 	}
 }
 
-// Retrying is bounded. A channel that genuinely does not exist answers the
-// same way every time, and bivy has to stop and say so.
+// Retrying is bounded, and the bound is one retry: a third ask is bivy
+// insisting, and insisting is what gets an address blocked (ADR-017).
 func TestRetryingGivesUp(t *testing.T) {
 	var calls int
 	c := against(t, func(w http.ResponseWriter, _ *http.Request) {
 		calls++
-		http.Error(w, "gone", http.StatusNotFound)
+		http.Error(w, "broken", http.StatusInternalServerError)
 	})
 
 	if _, err := c.Fetch(context.Background(), testChannel); err == nil {
@@ -299,6 +298,126 @@ func TestRetryingGivesUp(t *testing.T) {
 	}
 	if calls != attempts {
 		t.Errorf("made %d attempts, want %d", calls, attempts)
+	}
+}
+
+// A 429 is the service asking bivy to stop. Asking again is what turns a
+// throttle into a blocked address, so it is answered once and never repeated.
+func TestTooManyRequestsIsNotRetriedAndShutsTheGate(t *testing.T) {
+	var calls int
+	c := against(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		http.Error(w, "slow down", http.StatusTooManyRequests)
+	})
+
+	if _, err := c.Fetch(context.Background(), testChannel); err == nil {
+		t.Fatal("a 429 was treated as a feed")
+	}
+	if calls != 1 {
+		t.Errorf("made %d attempts at a 429, want 1", calls)
+	}
+	if reason, _, ok := c.Gate.Tripped(); !ok || reason != pushback.RateLimited {
+		t.Errorf("a 429 left the gate open (%q, %v)", reason, ok)
+	}
+}
+
+// A missing feed is an answer, not a stumble. Retrying it spent two extra
+// requests to arrive at the same message.
+func TestAMissingFeedIsNotRetried(t *testing.T) {
+	var calls int
+	c := against(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		http.Error(w, "gone", http.StatusNotFound)
+	})
+
+	if _, err := c.Fetch(context.Background(), testChannel); err == nil {
+		t.Fatal("a 404 was treated as a feed")
+	}
+	if calls != 1 {
+		t.Errorf("made %d attempts at a 404, want 1", calls)
+	}
+	if c.Gate.Shut() {
+		t.Error("a 404 shut the gate; a channel that moved is not push-back")
+	}
+}
+
+// When the server says how long to wait, that outranks bivy's own backoff.
+func TestRetryAfterIsHonoured(t *testing.T) {
+	var calls int
+	var gap time.Duration
+	last := time.Now()
+	c := against(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		gap = time.Since(last)
+		last = time.Now()
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "later", http.StatusServiceUnavailable)
+	})
+
+	if _, err := c.Fetch(context.Background(), testChannel); err == nil {
+		t.Fatal("a 503 was treated as a feed")
+	}
+	if calls != attempts {
+		t.Fatalf("made %d attempts, want %d", calls, attempts)
+	}
+	// The backoff alone is under a second, so a wait of one proves the header
+	// was read rather than ignored.
+	if gap < time.Second {
+		t.Errorf("waited %s before asking again, want at least the second it asked for", gap)
+	}
+}
+
+// A Retry-After long enough to outlast a launch is capped. Nothing asks again
+// anyway once the gate is shut; the header is not a licence to sleep.
+func TestAnAbsurdRetryAfterIsCapped(t *testing.T) {
+	if got := after("86400"); got != maxRetryAfter {
+		t.Errorf("after(86400) = %s, want %s", got, maxRetryAfter)
+	}
+	// The date form is not honoured: it would have bivy waiting on the
+	// difference between two clocks.
+	for _, header := range []string{"", "Wed, 21 Oct 2026 07:28:00 GMT", "-5", "soon"} {
+		if got := after(header); got != 0 {
+			t.Errorf("after(%q) = %s, want 0", header, got)
+		}
+	}
+}
+
+// The challenge that prompted all of this arrives as a 200 carrying a page
+// rather than a feed, which read as a broken channel before ADR-017.
+func TestAChallengePageShutsTheGate(t *testing.T) {
+	c := against(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, "<html><title>Before you continue to YouTube</title></html>")
+	})
+
+	_, err := c.Fetch(context.Background(), testChannel)
+	if !errors.Is(err, pushback.ErrStopped) {
+		t.Fatalf("a consent page reported %v, want ErrStopped", err)
+	}
+	if reason, _, ok := c.Gate.Tripped(); !ok || reason != pushback.BotCheck {
+		t.Errorf("a consent page left the gate open (%q, %v)", reason, ok)
+	}
+}
+
+// The point of the gate: once it is shut, nothing reaches the network again.
+func TestNothingIsAskedOnceTheGateIsShut(t *testing.T) {
+	var calls int
+	c := against(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		fmt.Fprint(w, sampleFeed)
+	})
+	c.Gate.Trip(pushback.RateLimited)
+
+	for _, ask := range []func() error{
+		func() error { _, err := c.Fetch(context.Background(), testChannel); return err },
+		func() error { _, err := c.Resolve(context.Background(), "@someone"); return err },
+		func() error { _, err := c.Thumbnail(context.Background(), "aaaaaaaaaaa"); return err },
+	} {
+		if err := ask(); !errors.Is(err, pushback.ErrStopped) {
+			t.Errorf("a shut gate returned %v, want ErrStopped", err)
+		}
+	}
+	if calls != 0 {
+		t.Errorf("%d requests were made after the gate shut, want none", calls)
 	}
 }
 
@@ -368,8 +487,11 @@ func TestThumbnail(t *testing.T) {
 	})
 	// The thumbnail host is not one of the bases the test server stands in
 	// for, so this asserts what it builds rather than what it fetches.
-	if got := media.ThumbnailURL("dQw4w9WgXcQ"); got != "https://i.ytimg.com/vi/dQw4w9WgXcQ/hq720.jpg" {
+	if got := media.ThumbnailURL("dQw4w9WgXcQ"); got != "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg" {
 		t.Errorf("thumbnail address = %q", got)
+	}
+	if got := media.WideThumbnailURL("dQw4w9WgXcQ"); got != "https://i.ytimg.com/vi/dQw4w9WgXcQ/hq720.jpg" {
+		t.Errorf("wide thumbnail address = %q", got)
 	}
 	_ = asked
 	_ = c
@@ -389,12 +511,10 @@ func TestThumbnailRefusesSomethingThatIsNotAVideo(t *testing.T) {
 	}
 }
 
-// A picture is fetched while somebody is moving the cursor, so the time it
-// takes is time the list is not moving. The first address 404s whenever the
-// larger size was never made, which is why there is a second one -- and
-// retrying that 404 three times with backoff was a second of waiting spent to
-// be told the same thing twice more.
-func TestAMissingThumbnailFallsStraightThroughToTheOtherAddress(t *testing.T) {
+// Scrolling a list of older videos used to send a guaranteed 404 per row,
+// because the widescreen size was asked for first and older videos never had
+// one. A burst of 404s from one address reads as scanning (ADR-019).
+func TestAThumbnailIsOneRequestToTheSizeThatAlwaysExists(t *testing.T) {
 	var asked []string
 	c := against(t, func(w http.ResponseWriter, r *http.Request) {
 		asked = append(asked, r.URL.Path)
@@ -410,9 +530,29 @@ func TestAMissingThumbnailFallsStraightThroughToTheOtherAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != "a picture" {
-		t.Errorf("got %q, want the fallback picture", got)
+		t.Errorf("got %q, want the picture", got)
 	}
-	if len(asked) != 2 {
-		t.Errorf("the host was asked %d times for %v; want one try each", len(asked), asked)
+	if len(asked) != 1 {
+		t.Errorf("the host was asked %d times for %v; want once", len(asked), asked)
+	}
+	if strings.Contains(asked[0], "hq720") {
+		t.Errorf("asked for the size older videos do not have: %q", asked[0])
+	}
+}
+
+// The better picture is a second, separate ask, made only for a row somebody
+// settled on — and a video that never had one is allowed to say so.
+func TestTheWideThumbnailIsAskedForSeparately(t *testing.T) {
+	var asked []string
+	c := against(t, func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		http.NotFound(w, r)
+	})
+
+	if _, err := c.WideThumbnail(context.Background(), "aaaaaaaaaaa"); err == nil {
+		t.Fatal("a missing widescreen picture reported success")
+	}
+	if len(asked) != 1 || !strings.Contains(asked[0], "hq720") {
+		t.Errorf("asked %v, want one request for the widescreen size", asked)
 	}
 }

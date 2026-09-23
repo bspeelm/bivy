@@ -244,7 +244,7 @@ func flags(socket, cookies string, keepWindow bool) []string {
 		// Only shrinks. Without it the session's first video sizes the window
 		// to itself, and anything at the screen's resolution opens filling it.
 		"--autofit-larger=" + openAtMost,
-		// One invented visitor, replaced before every video (ADR-016).
+		// The session's visitor, rewritten before every video (ADR-018).
 		"--ytdl-raw-options=cookies=" + cookies,
 	}
 
@@ -312,7 +312,7 @@ func (p *Player) Play(v media.Video) error {
 	}
 
 	// Before the load, not after: what the service writes back has to outlast
-	// the playback that needs it, and the next video discards it (ADR-016).
+	// the playback that needs it, and the next video discards it (ADR-018).
 	if _, err := visitor.Write(p.dir); err != nil {
 		return err
 	}

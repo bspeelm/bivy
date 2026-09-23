@@ -29,31 +29,28 @@ type Video struct {
 // feed chose, and this one is built from an identifier that has been checked.
 func (v Video) URL() string { return "https://www.youtube.com/watch?v=" + v.ID }
 
-// ThumbnailURLs is where a video's picture might be, best first. Derived from
-// the identifier rather than taken from whatever supplied the entry, so a
-// hostile feed or extractor cannot aim the fetch.
-//
-// hq720 is widescreen, and the shape a video actually is. hqdefault is
-// four-by-three with bars painted top and bottom, and a third of the
-// resolution — the fallback, because older videos have only that one.
+// Both addresses are derived from the identifier rather than from whatever
+// supplied the entry, so a hostile feed cannot aim the fetch.
 const ThumbnailHost = "https://i.ytimg.com/vi/"
 
-func ThumbnailURLs(videoID string) []string {
+// ThumbnailURL is the picture every video has: four-by-three with bars painted
+// top and bottom, and a third of the resolution. Asked for first because it is
+// never absent, so a row costs one request and no 404 (ADR-019).
+func ThumbnailURL(videoID string) string {
 	if !IsVideoID(videoID) {
-		return nil
+		return ""
 	}
-	return []string{
-		ThumbnailHost + videoID + "/hq720.jpg",
-		ThumbnailHost + videoID + "/hqdefault.jpg",
-	}
+	return ThumbnailHost + videoID + "/hqdefault.jpg"
 }
 
-// ThumbnailURL is the best address for a video's picture.
-func ThumbnailURL(videoID string) string {
-	if urls := ThumbnailURLs(videoID); len(urls) > 0 {
-		return urls[0]
+// WideThumbnailURL is the shape a video actually is. Older videos never had
+// one and answer 404, so it is a second request made only for a row somebody
+// has settled on.
+func WideThumbnailURL(videoID string) string {
+	if !IsVideoID(videoID) {
+		return ""
 	}
-	return ""
+	return ThumbnailHost + videoID + "/hq720.jpg"
 }
 
 // Channel is a channel: the entries its feed currently carries when it came

@@ -65,7 +65,7 @@ func TestParseReadsAFeed(t *testing.T) {
 	if got, want := v.Published, time.Date(2026, 9, 5, 9, 30, 0, 0, time.UTC); !got.Equal(want) {
 		t.Errorf("published = %s, want %s", got, want)
 	}
-	if got, want := v.Thumbnail, "https://i.ytimg.com/vi/bbbbbbbbbbb/hq720.jpg"; got != want {
+	if got, want := v.Thumbnail, "https://i.ytimg.com/vi/bbbbbbbbbbb/hqdefault.jpg"; got != want {
 		t.Errorf("thumbnail = %q, want %q", got, want)
 	}
 }
@@ -167,7 +167,7 @@ func TestParseDerivesTheThumbnailAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := ch.Videos[0].Thumbnail, "https://i.ytimg.com/vi/aaaaaaaaaaa/hq720.jpg"; got != want {
+	if got, want := ch.Videos[0].Thumbnail, "https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg"; got != want {
 		t.Errorf("thumbnail = %q, want %q", got, want)
 	}
 }

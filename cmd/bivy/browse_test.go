@@ -171,7 +171,9 @@ func (p *fakePlayer) Play(v media.Video) error {
 type fakeArt struct {
 	mu      sync.Mutex
 	fetched []string
+	wide    []string
 	fail    error
+	noWide  bool
 }
 
 func (a *fakeArt) Fetch(_ context.Context, videoID string) ([]byte, error) {
@@ -182,6 +184,23 @@ func (a *fakeArt) Fetch(_ context.Context, videoID string) ([]byte, error) {
 		return nil, a.fail
 	}
 	return []byte("picture of " + videoID), nil
+}
+
+// The widescreen size, which older videos do not have and answer 404 for.
+func (a *fakeArt) FetchWide(_ context.Context, videoID string) ([]byte, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.wide = append(a.wide, videoID)
+	if a.fail != nil || a.noWide {
+		return nil, errors.New("no widescreen picture for " + videoID)
+	}
+	return []byte("wide picture of " + videoID), nil
+}
+
+func (a *fakeArt) askedWide() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.wide...)
 }
 
 func (a *fakeArt) Draw(data []byte, cols, rows int, cell graphics.Cell) (string, error) {
@@ -2415,4 +2434,89 @@ func TestADecoderThatWillNotStartReachesTheStatusLine(t *testing.T) {
 	}
 	b.eventually(t, "Failed to initialize a decoder for codec 'h264'.")
 	b.quit(t)
+}
+
+// Holding an arrow key used to send a request per row it travelled past, and
+// a burst like that is a request pattern the service scores (ADR-019). What is
+// worth a picture is the row somebody stopped on.
+func TestScrollingPastRowsFetchesNothing(t *testing.T) {
+	b := newBrowser(t)
+	b.screen.draws = graphics.Kitty
+	b.app.art = b.art
+	// Long enough that the travelling is over well before it expires.
+	b.app.settle = 750 * time.Millisecond
+	b.run(t, "follow", chanA)
+	b.run(t, "follow", chanB)
+
+	b.start(t)
+	b.screen.press(named(term.KeyDown), named(term.KeyDown))
+
+	// Still moving, as far as the wait is concerned.
+	time.Sleep(200 * time.Millisecond)
+	if got := b.art.asked(); len(got) != 0 {
+		t.Errorf("fetched %v while the cursor was still travelling, want nothing", got)
+	}
+
+	b.eventuallyArt(t, "picture of ccccccccccc")
+	b.quit(t)
+
+	if got := b.art.asked(); len(got) != 1 || got[0] != "ccccccccccc" {
+		t.Errorf("fetched %v across three rows, want only the row it stopped on", got)
+	}
+}
+
+// The widescreen size is a second request, made only once the picture that
+// always exists is already on screen.
+func TestTheWidescreenPictureIsASecondRequest(t *testing.T) {
+	b := newBrowser(t)
+	b.screen.draws = graphics.Kitty
+	b.app.art = b.art
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
+	b.eventuallyArt(t, "wide picture of aaaaaaaaaaa")
+	b.quit(t)
+
+	if got := b.art.asked(); len(got) != 1 || got[0] != "aaaaaaaaaaa" {
+		t.Errorf("asked %v for the size every video has, want one request", got)
+	}
+	if got := b.art.askedWide(); len(got) != 1 || got[0] != "aaaaaaaaaaa" {
+		t.Errorf("asked %v for the widescreen size, want one request", got)
+	}
+}
+
+// Older videos never had a widescreen picture and answer 404. Asking once is
+// the cost of finding out; asking every time the cursor returns is the 404
+// burst this was meant to stop.
+func TestAVideoWithNoWidescreenPictureIsAskedOnce(t *testing.T) {
+	b := newBrowser(t)
+	b.screen.draws = graphics.Kitty
+	b.art.noWide = true
+	b.app.art = b.art
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
+	b.screen.press(named(term.KeyDown))
+	b.eventuallyArt(t, "picture of ccccccccccc")
+	b.screen.press(named(term.KeyUp))
+	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
+	b.quit(t)
+
+	for _, id := range []string{"aaaaaaaaaaa", "ccccccccccc"} {
+		if got := countOf(b.art.askedWide(), id); got != 1 {
+			t.Errorf("asked %d times for the widescreen %s, want once", got, id)
+		}
+	}
+}
+
+func countOf(all []string, want string) int {
+	n := 0
+	for _, s := range all {
+		if s == want {
+			n++
+		}
+	}
+	return n
 }

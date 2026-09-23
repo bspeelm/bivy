@@ -7,15 +7,36 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/bspeelm/bivy/internal/follow"
 	"github.com/bspeelm/bivy/internal/graphics"
 	"github.com/bspeelm/bivy/internal/media"
 	"github.com/bspeelm/bivy/internal/mpv"
+	"github.com/bspeelm/bivy/internal/pushback"
 	"github.com/bspeelm/bivy/internal/term"
 	"github.com/bspeelm/bivy/internal/tui"
 	"github.com/bspeelm/bivy/internal/ytdlp"
 )
+
+// thumbnailSettle is how long the cursor holds still before its row is worth
+// a request, so that scrolling past a row costs nothing (ADR-019).
+const thumbnailSettle = 250 * time.Millisecond
+
+// shot is a picture the session is holding. wide records that the widescreen
+// size has been asked for, existing or not, so a row asks for it once.
+type shot struct {
+	data []byte
+	wide bool
+}
+
+// arriving is a fetched picture on its way back into the loop.
+type arriving struct {
+	id   string
+	data []byte
+	wide bool
+	ok   bool
+}
 
 // queryLimit is what the search box will hold. The extractor refuses more, and
 // a box that silently keeps taking characters it will then reject is worse
@@ -34,8 +55,11 @@ type player interface {
 // artist is what the browser needs to put a picture on screen. A terminal that
 // cannot draw simply has none.
 type artist interface {
-	// Fetch returns a video's picture as the bytes a server sent.
+	// Fetch returns a video's picture as the bytes a server sent: the size
+	// every video has, so one request and no 404 by design.
 	Fetch(ctx context.Context, videoID string) ([]byte, error)
+	// FetchWide returns the widescreen size, which older videos do not have.
+	FetchWide(ctx context.Context, videoID string) ([]byte, error)
 	// Draw turns those bytes into what the terminal understands, for cells of
 	// the size the terminal said they are.
 	Draw(data []byte, cols, rows int, cell graphics.Cell) (string, error)
@@ -46,6 +70,10 @@ type pictures struct{ feeds fetcher }
 
 func (p pictures) Fetch(ctx context.Context, videoID string) ([]byte, error) {
 	return p.feeds.Thumbnail(ctx, videoID)
+}
+
+func (p pictures) FetchWide(ctx context.Context, videoID string) ([]byte, error) {
+	return p.feeds.WideThumbnail(ctx, videoID)
 }
 
 func (p pictures) Draw(data []byte, cols, rows int, cell graphics.Cell) (string, error) {
@@ -108,10 +136,17 @@ type browser struct {
 	// session has fetched. In memory and nowhere else — a thumbnail cache on
 	// disk is a viewing history in image form (ADR-007).
 	art       string
-	pictures  map[string][]byte
+	pictures  map[string]shot
 	drawn     string
 	drawnCols int
 	drawnRows int
+
+	// wanted is the row the wait is armed for, settleC fires once the cursor
+	// holds still on it, and arrived carries the picture back to the loop.
+	wanted  string
+	settle  *time.Timer
+	settleC <-chan time.Time
+	arrived chan arriving
 
 	// viewing is the channel whose videos are on screen, empty on every other
 	// screen. query is what was searched for, empty on the dashboard;
@@ -169,10 +204,15 @@ func (b *browser) close() {
 }
 
 func (b *browser) run(ctx context.Context) int {
+	// Here rather than at the two places a browser is built, so neither can
+	// be short of the channel the loop selects on.
+	b.arrived = make(chan arriving, 1)
+
 	if err := b.load(ctx); err != nil {
 		b.close()
 		return b.app.fail(err)
 	}
+	b.armPicture()
 	if err := b.draw(); err != nil {
 		b.close()
 		return b.app.fail(err)
@@ -187,6 +227,15 @@ func (b *browser) run(ctx context.Context) int {
 		select {
 		case <-ctx.Done():
 			return 0
+
+		case <-b.settleC:
+			b.fetchPicture(ctx)
+
+		case a, open := <-b.arrived:
+			if !open {
+				return 0
+			}
+			b.receive(a)
 
 		case press, open := <-b.screen.Keys():
 			if !open {
@@ -224,6 +273,7 @@ func (b *browser) run(ctx context.Context) int {
 		case <-b.screen.Resized():
 		}
 
+		b.armPicture()
 		if err := b.draw(); err != nil {
 			return b.app.fail(err)
 		}
@@ -827,6 +877,11 @@ func (b *browser) play(ctx context.Context) {
 // seconds has not been watched, and a program that says otherwise is keeping a
 // record of something that did not happen.
 func (b *browser) report(ctx context.Context, e mpv.Event) {
+	// mpv drives the extractor itself, so a challenge arrives as a complaint
+	// rather than as a status code bivy read (ADR-017).
+	if reason, pushing := pushback.Detect(e.Detail); pushing {
+		b.app.gate.Trip(reason)
+	}
 	// Nothing else would show it: a video with no decoder plays as sound.
 	if e.Name == mpv.Complaint {
 		b.status = tidy(e.Detail)
@@ -1099,13 +1154,14 @@ func (b *browser) failedNow() []string {
 	return b.failed
 }
 
-// picture is the drawn thumbnail for the row under the cursor: what is worth
-// a request is what somebody is looking at.
-func (b *browser) picture(ctx context.Context, cols, rows int, cell graphics.Cell) string {
+// picture is the drawn thumbnail for the row under the cursor, from what the
+// session already holds. Nothing is fetched here: drawing happens on every
+// keypress (ADR-019).
+func (b *browser) picture(cols, rows int, cell graphics.Cell) string {
 	if b.app.art == nil || cols < 1 || rows < 1 || b.selected >= len(b.rows) {
 		return ""
 	}
-	id := b.rows[b.selected].Video.ID
+	id := b.underCursor()
 	if id == "" {
 		return ""
 	}
@@ -1114,25 +1170,93 @@ func (b *browser) picture(ctx context.Context, cols, rows int, cell graphics.Cel
 	if id == b.drawn && cols == b.drawnCols && rows == b.drawnRows {
 		return b.art
 	}
+
+	held, ok := b.pictures[id]
+	if !ok || len(held.data) == 0 {
+		// Nothing yet, or nothing there; the row says what the video is.
+		b.drawn, b.art = "", ""
+		return ""
+	}
 	b.drawnCols, b.drawnRows = cols, rows
 
-	data, held := b.pictures[id]
-	if !held {
-		var err error
-		if data, err = b.app.art.Fetch(ctx, id); err != nil {
-			// Not worth a word on screen: the row says what the video is.
-			b.drawn, b.art = id, ""
-			return ""
-		}
-		b.remember(id, data)
-	}
-
-	drawn, err := b.app.art.Draw(data, cols, rows, cell)
+	drawn, err := b.app.art.Draw(held.data, cols, rows, cell)
 	if err != nil {
 		drawn = ""
 	}
 	b.drawn, b.art = id, drawn
 	return drawn
+}
+
+// underCursor is the video the cursor is on, empty where that is not a video.
+func (b *browser) underCursor() string {
+	if b.selected >= len(b.rows) {
+		return ""
+	}
+	return b.rows[b.selected].Video.ID
+}
+
+// armPicture starts the wait again whenever the cursor reaches a new row.
+func (b *browser) armPicture() {
+	if id := b.underCursor(); id != b.wanted {
+		b.wanted = id
+		b.waitForSettle()
+	}
+}
+
+// waitForSettle arms the wait while the row under the cursor has one owing.
+func (b *browser) waitForSettle() {
+	if b.settle != nil {
+		b.settle.Stop()
+	}
+	b.settleC = nil
+	if b.app.art == nil || b.wanted == "" {
+		return
+	}
+	if held, ok := b.pictures[b.wanted]; ok && held.wide {
+		return
+	}
+	b.settle = time.NewTimer(b.app.settle)
+	b.settleC = b.settle.C
+}
+
+// fetchPicture asks for the row the cursor settled on: the size every video
+// has first, and the widescreen one only once that is already showing.
+func (b *browser) fetchPicture(ctx context.Context) {
+	b.settleC = nil
+	id, art := b.wanted, b.app.art
+	if id == "" || art == nil {
+		return
+	}
+	_, showing := b.pictures[id]
+	arrived := b.arrived
+
+	go func() {
+		var data []byte
+		var err error
+		if showing {
+			data, err = art.FetchWide(ctx, id)
+		} else {
+			data, err = art.Fetch(ctx, id)
+		}
+		select {
+		case arrived <- arriving{id: id, data: data, wide: showing, ok: err == nil}:
+		case <-ctx.Done():
+		}
+	}()
+}
+
+// receive files a picture that arrived, including for a row already left.
+func (b *browser) receive(a arriving) {
+	held := b.pictures[a.id]
+	if a.ok {
+		held.data = a.data
+	}
+	// Recorded either way: one attempt is all a picture gets.
+	held.wide = a.wide || !a.ok
+	b.remember(a.id, held)
+
+	b.drawn = ""
+	b.waitForSettle()
 }
 
 // picturesHeld bounds what a session keeps: "small and short" is not a
@@ -1142,18 +1266,20 @@ const picturesHeld = 60
 // remember keeps a picture for the session, forgetting an arbitrary one once
 // there are too many — arbitrary because each is equally cheap to fetch
 // again.
-func (b *browser) remember(id string, data []byte) {
+func (b *browser) remember(id string, s shot) {
 	if b.pictures == nil {
 		// So a browser never handed one is short of a cache, not of a map.
-		b.pictures = map[string][]byte{}
+		b.pictures = map[string]shot{}
 	}
-	for len(b.pictures) >= picturesHeld {
-		for old := range b.pictures {
-			delete(b.pictures, old)
-			break
+	if _, held := b.pictures[id]; !held {
+		for len(b.pictures) >= picturesHeld {
+			for old := range b.pictures {
+				delete(b.pictures, old)
+				break
+			}
 		}
 	}
-	b.pictures[id] = data
+	b.pictures[id] = s
 }
 
 func (b *browser) draw() error {
@@ -1161,7 +1287,7 @@ func (b *browser) draw() error {
 	cell := b.screen.Cell()
 	cols, rows := tui.ArtBox(width, height, cell)
 	model := tui.Dashboard{
-		Art:         b.picture(context.Background(), cols, rows, cell),
+		Art:         b.picture(cols, rows, cell),
 		Playlist:    b.playlist,
 		Cell:        cell,
 		Rows:        b.rows,
@@ -1172,7 +1298,7 @@ func (b *browser) draw() error {
 		Width:       width,
 		Height:      height,
 		Selected:    b.selected,
-		Status:      b.status,
+		Status:      b.statusNow(),
 		Query:       b.query,
 		Channels:    b.channels,
 		Viewing:     b.viewing,
@@ -1188,6 +1314,14 @@ func (b *browser) draw() error {
 	// After the text, and only when it changed. Placed by row rather than
 	// written into the frame, so it cannot shift where a line of text lands.
 	return b.screen.DrawArt(model.ArtRow(), model.Art)
+}
+
+// statusNow is the status line. A shut gate outranks whatever else happened.
+func (b *browser) statusNow() string {
+	if says := b.app.gate.Says(); says != "" {
+		return says
+	}
+	return b.status
 }
 
 // playbackTrouble explains a video that would not play.

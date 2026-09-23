@@ -77,10 +77,9 @@ specific. Press enter and watch it.
 The person this is for lives in a terminal, runs a modern one, and does not
 want an account. bivy never authenticates, reads no browser cookie jar and
 holds no credential — the one cookie it sends is a visitor identifier it
-invents per request and discards (ADR-016) — so most of what a client like
-this normally has to get right does
-not apply here, and the privacy claim can be made machine-checkable instead of
-promised.
+invents for the session and never persists (ADR-018) — so most of what a
+client like this normally has to get right does not apply here, and the
+privacy claim can be made machine-checkable instead of promised.
 
 ### The smallest honest alternative
 
@@ -119,8 +118,10 @@ stripped at the boundary rather than trusted to the renderer.
 
 **What can the network see?** That bivy fetched some feeds and asked an
 extractor for a stream. Nothing that identifies the person: no account, no API
-key, no persistent identifier bivy invents — the visitor cookie the extractor
-carries is invented per request and discarded with it (ADR-016). IP-level
+key, no identifier bivy invents that outlives the session — the visitor cookie
+the extractor carries is invented at startup and discarded with the process
+(ADR-018), so requests within a sitting can be linked by it and nothing links
+one sitting to the next. IP-level
 exposure is
 the user's VPN's job and is explicitly out of scope — a program cannot fix it
 and should not pretend to.
@@ -229,7 +230,8 @@ mpv version that makes the gate deletable.
 
 There are none. bivy authenticates against nothing, reads no browser cookie
 jar, accepts no API key and stores no token. The visitor identifier it sends is
-not one of these: it is invented, random, and gone after the request (ADR-016). This section exists to be short
+not one of these: it is invented, random, held in memory, and gone when bivy
+exits (ADR-018). This section exists to be short
 and to stay short: the cheapest way to never leak a credential is to never hold
 one. ADR-004.
 
@@ -300,9 +302,10 @@ bivy makes exactly three kinds of outbound request:
    ADR-008.
 3. **Extractor calls**, from `internal/ytdlp` for search and from mpv itself
    for playback (ADR-010). Subprocess executions rather than requests bivy
-   makes itself, each carrying a visitor identifier bivy invented for it and
-   discards afterwards (ADR-016). One of them runs at launch, and only then: a channel whose
-   feed would not answer is listed by the extractor instead (ADR-013).
+   makes itself, each carrying the visitor identifier bivy invented for this
+   session and discards when it exits (ADR-018). One of them runs at launch,
+   and only then: a channel whose feed would not answer is listed by the
+   extractor instead (ADR-013).
 
 Nothing else. No analytics, no update check, no crash reporting, no ping. The
 budget in §0 is what makes this checkable rather than merely stated: one

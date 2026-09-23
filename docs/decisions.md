@@ -465,6 +465,14 @@ The privacy accounting is unchanged: the extractor is a subprocess, not a
 request bivy makes, so the one-package answer to what bivy says on the wire in
 §0 and §9 stands exactly as it did.
 
+ADR-017 bounds it. "A subprocess per failed channel" was written here as a cost
+worth paying and turned out to be the most scraper-shaped thing bivy does: a
+feed service having a bad morning made every launch fetch a browser page per
+followed channel, all at once. The fallback is now asked one channel at a time,
+with a pause between, for the first few only, and not at all once the service
+has pushed back. Channels past that bound are reported unreachable, which is
+what the dashboard already says about a channel it could not read.
+
 ### What it costs, said on screen
 
 A channel listing carries no publish times. The extractor will not give them
@@ -598,8 +606,13 @@ Nothing about the program has to change for this to become possible again.
 
 ## ADR-016 — bivy invents a visitor identifier for every request and keeps nothing the service sends back
 
-**Status:** accepted. This amends the surface of ADR-004 without weakening the
-refusal in it.
+**Status:** superseded by ADR-018, which keeps one identifier for the session
+instead of one per request. Everything below still describes why bivy sends a
+visitor cookie at all, and the second half of it — rotating the jar so that
+nothing the service writes into it survives — is unchanged and still enforced.
+What ADR-018 reverses is the rotation of bivy's *own* value, which cost more
+than it bought. This record is kept because the measurements in it are still
+the reason the cookie exists.
 
 ADR-004 says bivy never authenticates and reads no browser cookies. That still
 holds exactly. What changes is that bivy now sends one cookie of its own
@@ -669,3 +682,343 @@ said rather than "loading failed".
 all, which makes this dead code and it should go. Or the reverse — a demand
 that cannot be met without an account, which is ADR-004's territory and is
 answered there, not here.
+
+---
+
+## ADR-017 — When the service pushes back, bivy stops for the session rather than retrying into it
+
+**Status:** accepted. It bounds ADR-013 and replaces the retry policy
+`internal/feed` was built with.
+
+bivy's requests are few and its traffic is small, but small is not the same as
+quiet. What a bot check watches for is shape, and three of the shapes bivy made
+are ones it recognises.
+
+### What prompted it
+
+Every client on one address began being refused by the service, browsers
+included, not only bivy. That is an address-level block rather than anything
+about a single request, and bivy's request pattern is the part of it this
+project can answer for.
+
+Three things in the code made that pattern worse than the traffic warranted:
+
+- **404 and 429 were retried.** A 429 is the service asking bivy to stop, and
+  the code answered it by asking twice more. That is the one response where
+  retrying converts a throttle into a block.
+- **The ADR-013 fallback had no bound.** A feed service answering 5xx for a
+  while turned a launch into a browser-page fetch per followed channel, four at
+  a time, with no pause — on the path that runs before anyone has pressed a
+  key.
+- **Nothing recognised a refusal as a refusal.** A challenge arrives as a 200
+  carrying a page rather than a feed, which read as a broken channel, so the
+  next launch tried again exactly as hard.
+
+### The argument against
+
+Stopping for the session is a blunt instrument, and it can be wrong. One 429
+from an endpoint having a moment now costs the whole session: every later feed
+fetch, every search, every thumbnail, until bivy is restarted. A person who
+would have been fine thirty seconds later is told to come back later or move
+network, and the program they restart is the one that was working.
+
+It is also a state a session cannot leave, which is a shape worth being
+suspicious of. A gate that reopened after a while would be friendlier.
+
+That is the argument, and the answer to it is that a gate which reopens is a
+retry loop with a longer period. The failure being designed against is not one
+refused request; it is the address the requests come from being scored, where
+every further request is evidence. Automatic recovery is the behaviour that
+produced the problem, so the recovery here is a person deciding to try again.
+Restarting bivy is a cheap way to say so, and it is a decision rather than a
+loop.
+
+### The decision
+
+One gate, `internal/pushback`, holding session state and nothing else: no I/O,
+so the answer to what bivy says on the wire stays a one-package answer and the
+budget in §0 is untouched. Everything that reaches the service reports into it
+and consults it before asking.
+
+Retries become the narrow case rather than the default:
+
+| what the service said | what bivy does |
+|---|---|
+| 429 | shuts the gate; never retried |
+| a page where a feed was asked for | shuts the gate; never retried |
+| 5xx | retried once, after `Retry-After` if it said, otherwise a backoff with jitter |
+| 404 | not retried; a channel that moved answers the same way twice |
+| anything else | not retried |
+
+A challenge is read where a response failed to be what was asked for, not by
+scanning every body that arrived. The difference matters: a feed carrying a
+video titled "sign in to confirm you're not a bot" would otherwise end the
+session, and that video exists.
+
+The extractor reports what it saw on stderr, and mpv reports it as a complaint
+over the IPC socket, which bivy already listens to in order to say what went
+wrong. Both were already carrying the signal; neither needed a new channel for
+it.
+
+### What survives it
+
+The feed endpoint's intermittent 5xx is still absorbed — that was the real
+finding behind the old policy and it is still true, so one retry survives. What
+does not survive is retrying an answer that will not change, and retrying the
+one answer that means stop.
+
+The fallback in ADR-013 survives as well. An empty dashboard is still worse
+than a stale one; it is now bounded, paced, and skipped entirely once the gate
+is shut.
+
+### What it costs, said on screen
+
+A session that has stopped says so, and says the two things that actually
+change it, because "try again" is not one of them:
+
+    YouTube is rate-limiting this connection — bivy has stopped making requests; try later or from another network
+
+A dashboard that has quietly stopped refreshing looks exactly like one where
+nothing has been posted. Saying it is what keeps the difference visible.
+
+None of this hides the address the requests come from, and nothing in bivy can.
+That is a VPN's job and is out of scope by §2.
+
+**What would reopen this:** the service dropping the challenge, which makes the
+detection dead code and it should go. Or evidence that the gate fires on
+ordinary failures in practice, which is a detection problem rather than an
+argument for retrying.
+
+---
+
+## ADR-018 — One invented visitor for the session, rather than a new one per request
+
+**Status:** accepted. Supersedes ADR-016, and leaves ADR-004's refusal exactly
+where it was.
+
+ADR-016 invented a fresh visitor identifier for every request and threw it away
+afterwards. This keeps one for as long as bivy is running, and throws it away
+when bivy exits.
+
+### What prompted it
+
+An address running bivy was blocked by the service for every client on it,
+browsers included. A per-request identifier is a bot signature: from one
+address, it reads as a stream of brand-new anonymous visitors, each arriving
+once and never returning. Real clients do not behave that way, and the check is
+watching for exactly the shape ADR-016 chose deliberately — it said so, in its
+own closing section, and accepted the risk.
+
+The trade it was making does not survive inspection. The requests were already
+linked, by the address they came from, and the service does not need a cookie
+to do what the connection already tells it. So the rotation bought a property
+the address gives away in the same packet, and paid for it in the one signal
+the anti-bot system reads most clearly.
+
+### The argument against
+
+This is a real loss of privacy, and it should be named rather than waved past.
+Two searches and three videos in one sitting can now be tied together by
+something bivy sends, not merely inferred from the connection. If bivy is run
+behind a VPN shared with other people, the address stops being the linking
+factor and the identifier bivy invented becomes the best one available.
+
+That is the strongest form of it, and it is why this is a decision record and
+not a patch. The answer is that the loss is bounded in a way the old scheme's
+cost was not:
+
+- Nothing links one session to the next. The identifier is invented at the
+  first request and is gone when the process is, so a session is the largest
+  thing that can be correlated by it.
+- It is written nowhere bivy owns. It reaches the two jars the extractor and
+  the player read, both under a temporary directory removed with the process.
+  The two directories in §8 never see it, so the isolation test's write set is
+  unchanged.
+- It carries nothing. Eleven characters from `crypto/rand`, encoding nothing
+  about the machine, the install or the person.
+
+Against that: a session of requests that all fail because the address is
+blocked is not private, it is broken. A privacy property that only holds while
+the program does not work is not one worth defending.
+
+### What survives it
+
+The half of ADR-016 that was doing the real work. A jar left alone accumulates
+what the service writes into it, including an opaque value with a six-month
+expiry that only the service can read — a file that started as a random number
+becomes a durable identity a viewing history accrues to. Every write still
+replaces the jar rather than appending to it, so what bivy sends stays a number
+bivy invented and everything the service adds is discarded. A test holds that,
+and it is the same test as before.
+
+ADR-004 is untouched. The line is the account, and it is still tested rather
+than asserted: a fabricated account cookie was sent and refused, and what bivy
+sends carries no name and no session of the service's making.
+
+### What it costs, said plainly
+
+Requests within one session can be tied together by something bivy sends. The
+address already ties them together, so the loss is small — and it is not
+nothing, which is why it is written here and in the README rather than only in
+a commit message.
+
+Feed fetches are unaffected: they carry no cookie at all, and never did.
+
+This does not hide the address the requests come from, and nothing in bivy can.
+That is a VPN's job, it is out of scope by §2, and behind one this identifier
+is the thing that links a session rather than the address.
+
+**What would reopen this:** the service accepting requests with no cookie at
+all, which makes the whole mechanism dead code and it should go. Or evidence
+that a session-long visitor is itself what gets an address challenged, which
+would mean the cookie buys nothing and the same deletion follows.
+
+---
+
+## ADR-019 — A picture waits for the cursor to stop, and the size that always exists is asked for first
+
+**Status:** accepted. It paces what ADR-007 and ADR-012 already scoped, and
+changes neither.
+
+ADR-012 settled that bivy draws one picture, for the row under the cursor.
+ADR-007 settled that pictures are never written to disk. Both still hold. This
+is about when the request is made and which address it goes to.
+
+### What prompted it
+
+Two things in the thumbnail path made more requests than the feature needed,
+and both were on the interactive path where nobody was counting.
+
+The fetch happened inside the draw, and the draw happens on every keypress. So
+holding an arrow key down sent a request for every row the cursor travelled
+past — a burst of requests for pictures nobody saw, at exactly the rate the
+key repeats.
+
+And the widescreen address was asked for first. Older videos never had that
+size and answer 404, so every older row cost a guaranteed 404 before the real
+request. A run of 404s across sequential identifiers from one address is what
+scanning looks like.
+
+### The decision
+
+A row is fetched when the cursor has held still on it for 250ms, and the fetch
+happens off the draw path, with the result carried back into the loop that owns
+the browser. Scrolling past a row costs nothing at all.
+
+The size every video has is asked for first, so a row costs one request and no
+404. The widescreen size is a second request, made only once the first picture
+is already on screen — so it is paid for by rows somebody is actually looking
+at, and never by rows being scrolled through.
+
+A video that turns out to have no widescreen size is recorded as having been
+asked, so it is asked once and not every time the cursor returns to it.
+
+### The argument against
+
+Pictures appear later than they used to. Settling on a row now costs a quarter
+of a second before anything is fetched, and the good picture arrives after the
+adequate one rather than instead of it. For someone moving deliberately down a
+short list, this is strictly slower than what it replaces.
+
+That is true, and it is the trade. The quarter-second is spent only once per
+row somebody stopped on, where before it was spent on every row they passed —
+and the version that felt instant is the version that got an address blocked.
+A picture that arrives a moment late is a cost the person can see. A request
+pattern that gets the whole network refused is one they cannot.
+
+### What survives it
+
+Nothing about what is kept. Pictures still live in memory for the session and
+are gone when it ends, still bounded, and still written nowhere — ADR-007 is
+untouched, and there is still no cache directory. One picture is still drawn,
+for one row, which is ADR-012.
+
+### What it costs, said on screen
+
+Nothing is said on screen. A picture that has not arrived yet is an empty box,
+which is what it was before while the request was in flight, and the row beside
+it already says what the video is.
+
+**What would reopen this:** a terminal protocol or a host that makes the second
+request free, which would make the two-stage fetch pointless rather than
+merely unnecessary.
+
+---
+
+## ADR-020 — Whether the User-Agent should stop naming bivy
+
+**Status:** proposed. Nothing in the code changes until this is decided; the
+header is unchanged in the branches that prompted it.
+
+`internal/feed` sends `bivy (+https://github.com/bspeelm/bivy)` on every
+request it makes. This record weighs changing that and recommends nothing be
+changed yet.
+
+### What it actually covers
+
+Less than it appears to. bivy's own header goes on feed fetches and the one
+channel-page fetch in ADR-008 — the quiet, static half of what bivy does.
+Search, channel listing and playback go through the extractor and mpv, which
+send their own and are not bivy's to set. So this header is the fingerprint on
+the launch path and nowhere else, and changing it would leave the loudest
+traffic identified exactly as it is now.
+
+### The case for changing it
+
+Behind a VPN the reasoning inverts. The exit address is shared, so the address
+stops distinguishing one person's traffic from another's — and a header no
+other client sends becomes the thing that does. A unique string is a stable
+selector for one user's requests among everyone on that exit, which is the
+opposite of what running behind a VPN is for.
+
+It also makes bivy's traffic trivially separable as a class. Refusing it costs
+the service one rule.
+
+### The case against
+
+Three things, and the third is the one that decides it.
+
+**It is honest, and the honesty is the project's whole posture.** A client that
+names itself and links to its source is the convention for a non-browser client
+that wants to be identifiable and blockable. Everything else here is built so a
+stranger can check a claim rather than believe it; a header that says something
+untrue about what is making the request is a poor fit for that.
+
+**Sending a browser's string is worse than sending nothing.** A header claiming
+to be a browser, from a client whose TLS handshake, header order and HTTP/2
+settings are Go's, is a mismatch — and mismatches are a stronger bot signal
+than an honest non-browser header. This would be reaching for the shape that
+got the address blocked, not away from it.
+
+**It is a workaround aimed at a control rather than at a request pattern.**
+The branches this came from fixed things bivy was doing wrong: retrying a
+refusal, bursting, generating 404s. Those were defects. A header change fixes
+nothing bivy is doing wrong; it is the first step of pretending to be something
+else, and the argument that would justify it — "the service cannot tell, so it
+does not matter" — is available for much worse.
+
+### What is on the table
+
+| option | what it costs |
+|---|---|
+| keep it | one selector for bivy's feed traffic on a shared exit |
+| drop the header | Go's default string, which is equally distinctive and less honest about it |
+| a generic non-browser string | slightly less unique, still not a browser, and no longer says what to block |
+| a browser's string | a mismatched fingerprint, and a claim that is not true |
+| make it configurable | the decision moves to whoever runs it, and the default still has to be chosen |
+
+### The recommendation
+
+Keep it, and revisit only if the header is shown to be what is being refused.
+The exposure it creates is real but narrow: it covers the launch path, and on a
+shared exit the extractor's traffic is identifiable as an extractor whatever
+this header says. Spending the project's honesty to half-hide half the traffic
+is a poor trade.
+
+If it is changed, the generic non-browser string is the only option here worth
+taking. It is the one that reduces uniqueness without asserting anything false.
+
+**What would decide this:** evidence that requests carrying this header are
+refused where the same request without it is not, which is measurable and has
+not been measured.
+

@@ -1,6 +1,6 @@
-// Package visitor invents the identifier the service counts requests by, one
-// per request and thrown away after it -- a value kept between requests would
-// be the durable identifier this exists to avoid. ADR-016 has the cost.
+// Package visitor invents the identifier the service counts requests by: one
+// for the session, held in memory, written only into the jars the extractor
+// and the player read and removed with them. ADR-018 has the reasoning.
 package visitor
 
 import (
@@ -11,19 +11,23 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
-// FileName is the jar's name wherever it is written.
 const FileName = "cookies.txt"
 
 // Perm is the jar's mode: not a secret, but the one file bivy writes that
 // another local user could recognise a session by (ADR-001).
 const Perm fs.FileMode = 0o600
 
-// Write puts a jar holding one invented visitor identifier in dir, replacing
-// whatever was there, and returns its path.
+// session is who bivy is for as long as this process runs; never persisted.
+var session = sync.OnceValues(identifier)
+
+// Write puts a jar holding the session's visitor identifier in dir, replacing
+// whatever was there. Replacing is the point: a jar left alone accumulates
+// what the service writes into it, which is a durable identity (ADR-018).
 func Write(dir string) (string, error) {
-	id, err := identifier()
+	id, err := session()
 	if err != nil {
 		return "", err
 	}
