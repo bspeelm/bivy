@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/bspeelm/bivy/internal/media"
+	"github.com/bspeelm/bivy/internal/pushback"
 	"github.com/bspeelm/bivy/internal/visitor"
 )
 
@@ -35,6 +36,9 @@ const DefaultResults = 30
 type Client struct {
 	// Binary is the extractor to run. Empty means "yt-dlp", found on PATH.
 	Binary string
+
+	// Gate records the service having pushed back; a nil gate never shuts.
+	Gate *pushback.Gate
 }
 
 func New() *Client { return &Client{} }
@@ -62,6 +66,10 @@ func (c *Client) Search(ctx context.Context, query string, limit int) ([]media.V
 // Every argument before the caller's is a literal written here; the caller
 // supplies only what follows, already checked.
 func (c *Client) run(ctx context.Context, args ...string) (string, error) {
+	if err := c.Gate.Err(); err != nil {
+		return "", err
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, searchWait)
 	defer cancel()
 
@@ -102,6 +110,12 @@ func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 		}
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("the search took longer than %s", searchWait)
+		}
+		// The extractor is where a challenge is seen first: it asks for the
+		// page bivy never fetches itself, and says so on stderr.
+		if reason, pushing := pushback.Detect(stderr.String()); pushing {
+			c.Gate.Trip(reason)
+			return "", pushback.ErrStopped
 		}
 		return "", fmt.Errorf("the search failed: %s", firstLine(stderr.String(), err))
 	}

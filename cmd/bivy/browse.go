@@ -12,6 +12,7 @@ import (
 	"github.com/bspeelm/bivy/internal/graphics"
 	"github.com/bspeelm/bivy/internal/media"
 	"github.com/bspeelm/bivy/internal/mpv"
+	"github.com/bspeelm/bivy/internal/pushback"
 	"github.com/bspeelm/bivy/internal/term"
 	"github.com/bspeelm/bivy/internal/tui"
 	"github.com/bspeelm/bivy/internal/ytdlp"
@@ -827,6 +828,11 @@ func (b *browser) play(ctx context.Context) {
 // seconds has not been watched, and a program that says otherwise is keeping a
 // record of something that did not happen.
 func (b *browser) report(ctx context.Context, e mpv.Event) {
+	// mpv drives the extractor itself, so a challenge arrives as a complaint
+	// rather than as a status code bivy read (ADR-017).
+	if reason, pushing := pushback.Detect(e.Detail); pushing {
+		b.app.gate.Trip(reason)
+	}
 	// Nothing else would show it: a video with no decoder plays as sound.
 	if e.Name == mpv.Complaint {
 		b.status = tidy(e.Detail)
@@ -1172,7 +1178,7 @@ func (b *browser) draw() error {
 		Width:       width,
 		Height:      height,
 		Selected:    b.selected,
-		Status:      b.status,
+		Status:      b.statusNow(),
 		Query:       b.query,
 		Channels:    b.channels,
 		Viewing:     b.viewing,
@@ -1188,6 +1194,14 @@ func (b *browser) draw() error {
 	// After the text, and only when it changed. Placed by row rather than
 	// written into the frame, so it cannot shift where a line of text lands.
 	return b.screen.DrawArt(model.ArtRow(), model.Art)
+}
+
+// statusNow is the status line. A shut gate outranks whatever else happened.
+func (b *browser) statusNow() string {
+	if says := b.app.gate.Says(); says != "" {
+		return says
+	}
+	return b.status
 }
 
 // playbackTrouble explains a video that would not play.

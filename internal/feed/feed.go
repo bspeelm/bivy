@@ -10,13 +10,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/bspeelm/bivy/internal/media"
+	"github.com/bspeelm/bivy/internal/pushback"
 )
 
 const (
@@ -35,19 +38,23 @@ const (
 	// this string that varies per install, per machine, or per run.
 	userAgent = "bivy (+https://github.com/bspeelm/bivy)"
 
-	// The feed endpoint answers 404 or 500 to roughly four requests in ten,
-	// intermittently, for channels that answer 200 on the next attempt.
-	// Measured, not assumed. One attempt therefore makes following a channel
-	// and refreshing the dashboard a coin toss.
-	attempts = 3
-	// Short, because this runs at launch while somebody waits. The whole of a
-	// failed set of attempts still costs under a second of waiting.
-	backoff = 250 * time.Millisecond
+	// The feed endpoint answers 5xx intermittently for channels that answer
+	// 200 next time. One retry, and only for that: a third ask is bivy
+	// insisting (ADR-017).
+	attempts = 2
+	// Waited before the retry, plus as much again in jitter, so a refresh of
+	// many channels does not ask them all again in the same instant.
+	backoff = 500 * time.Millisecond
+	// A Retry-After past this is longer than anyone waits at a launch.
+	maxRetryAfter = 5 * time.Second
 )
 
 // Client fetches feeds. The zero value is not usable; call New.
 type Client struct {
 	http *http.Client
+
+	// Gate records the service having pushed back; a nil gate never shuts.
+	Gate *pushback.Gate
 
 	// Where requests go. Fields rather than constants so the tests can point
 	// them at a local server without a seam in the production path.
@@ -91,6 +98,16 @@ func (c *Client) Fetch(ctx context.Context, channelID string) (media.Channel, er
 		return media.Channel{}, err
 	}
 	ch, err := Parse(strings.NewReader(body))
+	// A challenge arrives as a 200 carrying a page rather than a feed, so the
+	// body is read for one only once it has failed to be a feed: scanning
+	// every body would shut the session over a video titled "sign in to
+	// confirm" (ADR-017).
+	if !isFeed(ch, err) {
+		if reason, pushing := pushback.Detect(body); pushing {
+			c.Gate.Trip(reason)
+			return media.Channel{}, fmt.Errorf("channel %s: %w", channelID, pushback.ErrStopped)
+		}
+	}
 	if err != nil {
 		return media.Channel{}, fmt.Errorf("channel %s: %w", channelID, err)
 	}
@@ -105,19 +122,30 @@ func (c *Client) Fetch(ctx context.Context, channelID string) (media.Channel, er
 	return ch, nil
 }
 
-// transient reports whether a status is one this endpoint hands out and then
-// takes back.
-//
-// 404 is on the list, which is not how 404 usually reads. It is here because
-// the feed endpoint measurably answers it to requests for channels that exist,
-// and a channel that genuinely does not exist answers it every time — so the
-// cost of including it is two extra requests before the same message.
-func transient(status int) bool {
-	switch status {
-	case http.StatusNotFound, http.StatusTooManyRequests:
-		return true
+// isFeed reports whether what parsed is really a channel feed. A page served
+// where a feed was asked for can be well-formed XML and decode into nothing,
+// so the parse error alone does not answer it. An empty channel names itself.
+func isFeed(ch media.Channel, err error) bool {
+	return err == nil && (ch.ID != "" || len(ch.Videos) > 0)
+}
+
+// after reads a Retry-After header. Only its seconds form is honoured: the
+// date form would have bivy waiting on the difference between two clocks.
+func after(header string) time.Duration {
+	secs, err := strconv.Atoi(strings.TrimSpace(header))
+	if err != nil || secs <= 0 {
+		return 0
 	}
-	return status >= 500
+	return min(time.Duration(secs)*time.Second, maxRetryAfter)
+}
+
+// wait is what the server asked to be left alone for, else backoff and jitter.
+func wait(err error) time.Duration {
+	var r retryable
+	if errors.As(err, &r) && r.after > 0 {
+		return r.after
+	}
+	return backoff + rand.N(backoff)
 }
 
 // channelIDIn finds a channel identifier in a page, in the order the markers
@@ -174,6 +202,10 @@ func (c *Client) Resolve(ctx context.Context, handle string) (string, error) {
 			return m[1], nil
 		}
 	}
+	if reason, pushing := pushback.Detect(body); pushing {
+		c.Gate.Trip(reason)
+		return "", pushback.ErrStopped
+	}
 	return "", fmt.Errorf("no channel identifier on the page for %s", handle)
 }
 
@@ -186,7 +218,7 @@ func (c *Client) get(ctx context.Context, target string, limit int64) (string, e
 			select {
 			case <-ctx.Done():
 				return "", ctx.Err()
-			case <-time.After(time.Duration(attempt) * backoff):
+			case <-time.After(wait(err)):
 			}
 		}
 
@@ -202,8 +234,12 @@ func (c *Client) get(ctx context.Context, target string, limit int64) (string, e
 	return "", err
 }
 
-// retryable marks a failure the server may well answer differently next time.
-type retryable struct{ error }
+// retryable marks a failure the server may well answer differently next time,
+// carrying however long it asked to be left alone for.
+type retryable struct {
+	error
+	after time.Duration
+}
 
 // worthRetrying reports whether another attempt is worth making. A cancelled
 // context never is: the caller has stopped waiting.
@@ -219,6 +255,10 @@ func worthRetrying(err error) bool {
 // body length is chosen by the server, and io.ReadAll on a remote response is
 // an invitation phrased as convenience (ADR-001).
 func (c *Client) attempt(ctx context.Context, target string, limit int64) (string, error) {
+	if err := c.Gate.Err(); err != nil {
+		return "", err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return "", err
@@ -233,14 +273,18 @@ func (c *Client) attempt(ctx context.Context, target string, limit int64) (strin
 	if err != nil {
 		// A connection that failed is worth another go; a request that could
 		// not be built is not, and never reaches here.
-		return "", retryable{err}
+		return "", retryable{err, 0}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		err := fmt.Errorf("%s: %s", target, resp.Status)
-		if transient(resp.StatusCode) {
-			return "", retryable{err}
+		switch {
+		case resp.StatusCode == http.StatusTooManyRequests:
+			// Never retried: asking again turns a throttle into a block.
+			c.Gate.Trip(pushback.RateLimited)
+		case resp.StatusCode >= 500:
+			return "", retryable{err, after(resp.Header.Get("Retry-After"))}
 		}
 		return "", err
 	}

@@ -465,6 +465,14 @@ The privacy accounting is unchanged: the extractor is a subprocess, not a
 request bivy makes, so the one-package answer to what bivy says on the wire in
 §0 and §9 stands exactly as it did.
 
+ADR-017 bounds it. "A subprocess per failed channel" was written here as a cost
+worth paying and turned out to be the most scraper-shaped thing bivy does: a
+feed service having a bad morning made every launch fetch a browser page per
+followed channel, all at once. The fallback is now asked one channel at a time,
+with a pause between, for the first few only, and not at all once the service
+has pushed back. Channels past that bound are reported unreachable, which is
+what the dashboard already says about a channel it could not read.
+
 ### What it costs, said on screen
 
 A channel listing carries no publish times. The extractor will not give them
@@ -669,3 +677,109 @@ said rather than "loading failed".
 all, which makes this dead code and it should go. Or the reverse — a demand
 that cannot be met without an account, which is ADR-004's territory and is
 answered there, not here.
+
+---
+
+## ADR-017 — When the service pushes back, bivy stops for the session rather than retrying into it
+
+**Status:** accepted. It bounds ADR-013 and replaces the retry policy
+`internal/feed` was built with.
+
+bivy's requests are few and its traffic is small, but small is not the same as
+quiet. What a bot check watches for is shape, and three of the shapes bivy made
+are ones it recognises.
+
+### What prompted it
+
+Every client on one address began being refused by the service, browsers
+included, not only bivy. That is an address-level block rather than anything
+about a single request, and bivy's request pattern is the part of it this
+project can answer for.
+
+Three things in the code made that pattern worse than the traffic warranted:
+
+- **404 and 429 were retried.** A 429 is the service asking bivy to stop, and
+  the code answered it by asking twice more. That is the one response where
+  retrying converts a throttle into a block.
+- **The ADR-013 fallback had no bound.** A feed service answering 5xx for a
+  while turned a launch into a browser-page fetch per followed channel, four at
+  a time, with no pause — on the path that runs before anyone has pressed a
+  key.
+- **Nothing recognised a refusal as a refusal.** A challenge arrives as a 200
+  carrying a page rather than a feed, which read as a broken channel, so the
+  next launch tried again exactly as hard.
+
+### The argument against
+
+Stopping for the session is a blunt instrument, and it can be wrong. One 429
+from an endpoint having a moment now costs the whole session: every later feed
+fetch, every search, every thumbnail, until bivy is restarted. A person who
+would have been fine thirty seconds later is told to come back later or move
+network, and the program they restart is the one that was working.
+
+It is also a state a session cannot leave, which is a shape worth being
+suspicious of. A gate that reopened after a while would be friendlier.
+
+That is the argument, and the answer to it is that a gate which reopens is a
+retry loop with a longer period. The failure being designed against is not one
+refused request; it is the address the requests come from being scored, where
+every further request is evidence. Automatic recovery is the behaviour that
+produced the problem, so the recovery here is a person deciding to try again.
+Restarting bivy is a cheap way to say so, and it is a decision rather than a
+loop.
+
+### The decision
+
+One gate, `internal/pushback`, holding session state and nothing else: no I/O,
+so the answer to what bivy says on the wire stays a one-package answer and the
+budget in §0 is untouched. Everything that reaches the service reports into it
+and consults it before asking.
+
+Retries become the narrow case rather than the default:
+
+| what the service said | what bivy does |
+|---|---|
+| 429 | shuts the gate; never retried |
+| a page where a feed was asked for | shuts the gate; never retried |
+| 5xx | retried once, after `Retry-After` if it said, otherwise a backoff with jitter |
+| 404 | not retried; a channel that moved answers the same way twice |
+| anything else | not retried |
+
+A challenge is read where a response failed to be what was asked for, not by
+scanning every body that arrived. The difference matters: a feed carrying a
+video titled "sign in to confirm you're not a bot" would otherwise end the
+session, and that video exists.
+
+The extractor reports what it saw on stderr, and mpv reports it as a complaint
+over the IPC socket, which bivy already listens to in order to say what went
+wrong. Both were already carrying the signal; neither needed a new channel for
+it.
+
+### What survives it
+
+The feed endpoint's intermittent 5xx is still absorbed — that was the real
+finding behind the old policy and it is still true, so one retry survives. What
+does not survive is retrying an answer that will not change, and retrying the
+one answer that means stop.
+
+The fallback in ADR-013 survives as well. An empty dashboard is still worse
+than a stale one; it is now bounded, paced, and skipped entirely once the gate
+is shut.
+
+### What it costs, said on screen
+
+A session that has stopped says so, and says the two things that actually
+change it, because "try again" is not one of them:
+
+    YouTube is rate-limiting this connection — bivy has stopped making requests; try later or from another network
+
+A dashboard that has quietly stopped refreshing looks exactly like one where
+nothing has been posted. Saying it is what keeps the difference visible.
+
+None of this hides the address the requests come from, and nothing in bivy can.
+That is a VPN's job and is out of scope by §2.
+
+**What would reopen this:** the service dropping the challenge, which makes the
+detection dead code and it should go. Or evidence that the gate fires on
+ordinary failures in practice, which is a detection problem rather than an
+argument for retrying.

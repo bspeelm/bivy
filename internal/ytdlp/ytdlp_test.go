@@ -5,9 +5,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bspeelm/bivy/internal/pushback"
 )
 
 // The extractor has options that run arbitrary shell commands, so what may
@@ -389,5 +392,70 @@ func TestAskingForASecondPageAsksForMoreThanTheFirst(t *testing.T) {
 	}
 	if deep != "ytsearch5000:cats" {
 		t.Errorf("a deep page asked for %q; bivy is imposing a ceiling of its own", deep)
+	}
+}
+
+// refusingExtractor is a stand-in that fails the way the extractor does when
+// the service wants a human: a line on stderr and a non-zero exit.
+func refusingExtractor(t *testing.T, complaint string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "stand-in")
+	script := "#!/bin/sh\nprintf '%s\\n' " + strconv.Quote(complaint) + " >&2\nexit 1\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The extractor sees the challenge before bivy does: it asks for the page bivy
+// never fetches itself. What it says on stderr is the signal (ADR-017).
+func TestAChallengeOnStderrShutsTheGate(t *testing.T) {
+	for complaint, want := range map[string]string{
+		"ERROR: [youtube] aaaaaaaaaaa: Sign in to confirm you're not a bot":    pushback.BotCheck,
+		"ERROR: Unable to download webpage: HTTP Error 429: Too Many Requests": pushback.RateLimited,
+	} {
+		gate := &pushback.Gate{}
+		c := &Client{Binary: refusingExtractor(t, complaint), Gate: gate}
+
+		_, err := c.Search(context.Background(), "anything", 1)
+		if !errors.Is(err, pushback.ErrStopped) {
+			t.Errorf("%q reported %v, want ErrStopped", complaint, err)
+		}
+		if reason, _, ok := gate.Tripped(); !ok || reason != want {
+			t.Errorf("%q left the gate at (%q, %v), want %q", complaint, reason, ok, want)
+		}
+	}
+}
+
+// An ordinary failure is not push-back. A gate that shut on one would end a
+// session because a single video was private.
+func TestAnOrdinaryFailureLeavesTheGateOpen(t *testing.T) {
+	gate := &pushback.Gate{}
+	c := &Client{Binary: refusingExtractor(t, "ERROR: [youtube] aaaaaaaaaaa: Video unavailable"), Gate: gate}
+
+	if _, err := c.Search(context.Background(), "anything", 1); errors.Is(err, pushback.ErrStopped) {
+		t.Error("an unavailable video was read as push-back")
+	}
+	if gate.Shut() {
+		t.Error("an unavailable video shut the gate")
+	}
+}
+
+// Once the gate is shut the extractor is not run at all: not asking again is
+// the whole of the remedy.
+func TestTheExtractorIsNotRunOnceTheGateIsShut(t *testing.T) {
+	gate := &pushback.Gate{}
+	gate.Trip(pushback.RateLimited)
+	c := &Client{Binary: standInExtractor(t), Gate: gate}
+
+	for _, ask := range []func() error{
+		func() error { _, err := c.Search(context.Background(), "anything", 1); return err },
+		func() error { _, err := c.Channels(context.Background(), "anything", 1); return err },
+		func() error { _, err := c.Uploads(context.Background(), "UCabcdefghijklmnopqrstuv", 1); return err },
+	} {
+		if err := ask(); !errors.Is(err, pushback.ErrStopped) {
+			t.Errorf("a shut gate returned %v, want ErrStopped", err)
+		}
 	}
 }
