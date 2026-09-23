@@ -291,10 +291,9 @@ func standInExtractor(t *testing.T) string {
 	return path
 }
 
-// Search goes through the extractor too, and an identity that persisted across
-// searches would be the durable handle ADR-016 exists to avoid -- in the half
-// of the program nobody was looking at.
-func TestEverySearchIsANewVisitor(t *testing.T) {
+// Search goes through the extractor too, so it carries the session's visitor
+// like everything else (ADR-018). What must never appear here is an account.
+func TestEverySearchIsTheSameVisitor(t *testing.T) {
 	c := &Client{Binary: standInExtractor(t)}
 
 	var ids []string
@@ -330,8 +329,8 @@ func TestEverySearchIsANewVisitor(t *testing.T) {
 	if len(ids) != 2 {
 		t.Fatalf("read %d identifiers, want 2", len(ids))
 	}
-	if ids[0] == ids[1] {
-		t.Errorf("both searches went out as %q", ids[0])
+	if ids[0] != ids[1] {
+		t.Errorf("the searches went out as %q and %q, and a session is one visitor", ids[0], ids[1])
 	}
 }
 

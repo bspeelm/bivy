@@ -78,7 +78,7 @@ func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 		binary = "yt-dlp"
 	}
 
-	// A visitor for this search and no other, gone when it returns (ADR-016).
+	// The session's visitor, in a directory gone when the search returns.
 	dir, err := os.MkdirTemp("", "bivy-")
 	if err != nil {
 		return "", fmt.Errorf("making a place for the visitor cookie: %w", err)

@@ -650,10 +650,10 @@ func jarValue(t *testing.T, p *Player) string {
 	return ""
 }
 
-// One mpv serves a whole session, so the jar is the only thing that can change
-// between videos. If it did not, every video in a session would be the same
-// stranger and the session itself would be the identifier (ADR-016).
-func TestEachVideoIsANewVisitor(t *testing.T) {
+// One mpv serves a whole session and one visitor goes with it (ADR-018). The
+// jar is still rewritten before every video, and that is what this checks
+// alongside: the identifier is bivy's, and it survives what the service adds.
+func TestEveryVideoIsTheSameVisitor(t *testing.T) {
 	p := start(t, "play-to-the-end")
 
 	if err := p.Play(aVideo()); err != nil {
@@ -664,8 +664,8 @@ func TestEachVideoIsANewVisitor(t *testing.T) {
 	if err := p.Play(aVideo()); err != nil {
 		t.Fatal(err)
 	}
-	if second := jarValue(t, p); second == first {
-		t.Errorf("both videos went out as %q", second)
+	if second := jarValue(t, p); second != first {
+		t.Errorf("the second video went out as %q, and the session began as %q", second, first)
 	}
 }
 

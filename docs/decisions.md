@@ -606,8 +606,13 @@ Nothing about the program has to change for this to become possible again.
 
 ## ADR-016 — bivy invents a visitor identifier for every request and keeps nothing the service sends back
 
-**Status:** accepted. This amends the surface of ADR-004 without weakening the
-refusal in it.
+**Status:** superseded by ADR-018, which keeps one identifier for the session
+instead of one per request. Everything below still describes why bivy sends a
+visitor cookie at all, and the second half of it — rotating the jar so that
+nothing the service writes into it survives — is unchanged and still enforced.
+What ADR-018 reverses is the rotation of bivy's *own* value, which cost more
+than it bought. This record is kept because the measurements in it are still
+the reason the cookie exists.
 
 ADR-004 says bivy never authenticates and reads no browser cookies. That still
 holds exactly. What changes is that bivy now sends one cookie of its own
@@ -783,3 +788,87 @@ That is a VPN's job and is out of scope by §2.
 detection dead code and it should go. Or evidence that the gate fires on
 ordinary failures in practice, which is a detection problem rather than an
 argument for retrying.
+
+---
+
+## ADR-018 — One invented visitor for the session, rather than a new one per request
+
+**Status:** accepted. Supersedes ADR-016, and leaves ADR-004's refusal exactly
+where it was.
+
+ADR-016 invented a fresh visitor identifier for every request and threw it away
+afterwards. This keeps one for as long as bivy is running, and throws it away
+when bivy exits.
+
+### What prompted it
+
+An address running bivy was blocked by the service for every client on it,
+browsers included. A per-request identifier is a bot signature: from one
+address, it reads as a stream of brand-new anonymous visitors, each arriving
+once and never returning. Real clients do not behave that way, and the check is
+watching for exactly the shape ADR-016 chose deliberately — it said so, in its
+own closing section, and accepted the risk.
+
+The trade it was making does not survive inspection. The requests were already
+linked, by the address they came from, and the service does not need a cookie
+to do what the connection already tells it. So the rotation bought a property
+the address gives away in the same packet, and paid for it in the one signal
+the anti-bot system reads most clearly.
+
+### The argument against
+
+This is a real loss of privacy, and it should be named rather than waved past.
+Two searches and three videos in one sitting can now be tied together by
+something bivy sends, not merely inferred from the connection. If bivy is run
+behind a VPN shared with other people, the address stops being the linking
+factor and the identifier bivy invented becomes the best one available.
+
+That is the strongest form of it, and it is why this is a decision record and
+not a patch. The answer is that the loss is bounded in a way the old scheme's
+cost was not:
+
+- Nothing links one session to the next. The identifier is invented at the
+  first request and is gone when the process is, so a session is the largest
+  thing that can be correlated by it.
+- It is written nowhere bivy owns. It reaches the two jars the extractor and
+  the player read, both under a temporary directory removed with the process.
+  The two directories in §8 never see it, so the isolation test's write set is
+  unchanged.
+- It carries nothing. Eleven characters from `crypto/rand`, encoding nothing
+  about the machine, the install or the person.
+
+Against that: a session of requests that all fail because the address is
+blocked is not private, it is broken. A privacy property that only holds while
+the program does not work is not one worth defending.
+
+### What survives it
+
+The half of ADR-016 that was doing the real work. A jar left alone accumulates
+what the service writes into it, including an opaque value with a six-month
+expiry that only the service can read — a file that started as a random number
+becomes a durable identity a viewing history accrues to. Every write still
+replaces the jar rather than appending to it, so what bivy sends stays a number
+bivy invented and everything the service adds is discarded. A test holds that,
+and it is the same test as before.
+
+ADR-004 is untouched. The line is the account, and it is still tested rather
+than asserted: a fabricated account cookie was sent and refused, and what bivy
+sends carries no name and no session of the service's making.
+
+### What it costs, said plainly
+
+Requests within one session can be tied together by something bivy sends. The
+address already ties them together, so the loss is small — and it is not
+nothing, which is why it is written here and in the README rather than only in
+a commit message.
+
+Feed fetches are unaffected: they carry no cookie at all, and never did.
+
+This does not hide the address the requests come from, and nothing in bivy can.
+That is a VPN's job, it is out of scope by §2, and behind one this identifier
+is the thing that links a session rather than the address.
+
+**What would reopen this:** the service accepting requests with no cookie at
+all, which makes the whole mechanism dead code and it should go. Or evidence
+that a session-long visitor is itself what gets an address challenged, which
+would mean the cookie buys nothing and the same deletion follows.

@@ -30,20 +30,39 @@ func value(t *testing.T, jar string) string {
 	return ""
 }
 
-// The whole point. A value reused between requests is the durable identifier
-// this package exists to avoid, and it would be the easy thing to write.
-func TestEveryVisitorIsANewOne(t *testing.T) {
+// The whole point of ADR-018. One identifier for the session, so that bivy
+// stops arriving as a crowd of brand-new visitors from one address.
+func TestTheVisitorIsTheSameAllSession(t *testing.T) {
 	dir := t.TempDir()
 
-	seen := map[string]bool{}
-	for i := 0; i < 20; i++ {
+	path, err := Write(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := value(t, read(t, path))
+
+	for i := range 20 {
 		path, err := Write(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
-		id := value(t, read(t, path))
+		if id := value(t, read(t, path)); id != first {
+			t.Fatalf("write %d sent %q, and the session began as %q", i+1, id, first)
+		}
+	}
+}
+
+// What the session identifier may not be is derived from the machine, or the
+// same one twice. A process that ended takes its visitor with it (ADR-018).
+func TestANewSessionIsANewVisitor(t *testing.T) {
+	seen := map[string]bool{}
+	for i := range 20 {
+		id, err := identifier()
+		if err != nil {
+			t.Fatal(err)
+		}
 		if seen[id] {
-			t.Fatalf("the identifier %q came round again on write %d", id, i+1)
+			t.Fatalf("the identifier %q came round again on session %d", id, i+1)
 		}
 		seen[id] = true
 	}
@@ -68,8 +87,11 @@ func TestTheJarCarriesNoAccount(t *testing.T) {
 	}
 }
 
-// Replacing rather than appending is what discards whatever the service sent
-// back during the request before this one.
+// Replacing rather than appending is what discards whatever the service wrote
+// into the jar. This survives ADR-018 unchanged: it is the half of ADR-016
+// that was doing the work, and the half a session-long identifier does not
+// weaken. What bivy sends stays a random number; what the service adds to it
+// never reaches a second request.
 func TestWritingReplacesWhatTheServiceSent(t *testing.T) {
 	dir := t.TempDir()
 	path, err := Write(dir)
@@ -96,8 +118,8 @@ func TestWritingReplacesWhatTheServiceSent(t *testing.T) {
 	if strings.Contains(jar, "__Secure-YNID") || strings.Contains(jar, "YSC") {
 		t.Errorf("what the service sent survived into the next request: %q", jar)
 	}
-	if value(t, jar) == first {
-		t.Error("the next request reused the identifier the service has already seen")
+	if got := value(t, jar); got != first {
+		t.Errorf("the identifier changed to %q mid-session, and %q was the session's", got, first)
 	}
 }
 

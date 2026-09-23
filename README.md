@@ -8,11 +8,14 @@ Follow channels. Launch and see what is new. Search when you want something
 specific. Press enter and watch it in mpv.
 
 bivy does not download, does not log in, and holds no account. The one cookie
-it sends is a visitor identifier it invents per request and throws away
-(ADR-016). One package in
-the whole program touches the network, and it has one dependency in total,
-which is what makes that a claim you can check rather than one you have to
-take.
+it sends is a visitor identifier it invents at startup, keeps for as long as it
+is running, and never writes to disk; a new run is a new stranger (ADR-018).
+One package in the whole program touches the network, and it has one dependency
+in total, which is what makes that a claim you can check rather than one you
+have to take.
+
+None of that hides the address you connect from, and no program can. For that,
+run bivy behind a VPN.
 
 ## Status
 
