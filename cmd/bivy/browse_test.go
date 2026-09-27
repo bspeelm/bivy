@@ -2528,7 +2528,7 @@ func TestTheRowsBesideTheCursorAreFilledInBehindIt(t *testing.T) {
 
 // Spaced enough not to read as a burst: the next request is armed only once
 // the last has landed, so one is in flight at a time and the gap between any
-// two is at least the spacing (ADR-022).
+// two is at least the spacing, jitter on top (ADR-022).
 func TestTheFillIsSpacedAndOneAtATime(t *testing.T) {
 	b := newBrowser(t)
 	b.screen.draws = graphics.Kitty
@@ -2553,6 +2553,22 @@ func TestTheFillIsSpacedAndOneAtATime(t *testing.T) {
 			t.Errorf("request %d followed the one before it after %s, want at least %s",
 				i+1, gap, trickleSpacing)
 		}
+	}
+}
+
+// The feeds are jittered so they keep off a fixed rhythm, and the fill is
+// the busiest path in the program; a metronome is the easier pattern to spot.
+func TestTheFillKeepsOffAFixedRhythm(t *testing.T) {
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 1000; i++ {
+		w := trickleWait()
+		if w < trickleSpacing || w >= 2*trickleSpacing {
+			t.Fatalf("a wait of %s is outside [%s, %s)", w, trickleSpacing, 2*trickleSpacing)
+		}
+		seen[w] = true
+	}
+	if len(seen) < 100 {
+		t.Errorf("1000 waits took %d distinct values; that is close to a metronome", len(seen))
 	}
 }
 

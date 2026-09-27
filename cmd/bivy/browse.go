@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"strings"
@@ -20,7 +21,8 @@ import (
 )
 
 // How long the cursor holds still before its row is worth a request, three
-// key repeats wide; the floor on the gap between background requests; and how
+// key repeats wide; the floor on the gap between background requests, which
+// carry as much again in jitter so the fill keeps off a fixed rhythm; and how
 // far either side of the cursor those fill in (ADR-019, ADR-022).
 const (
 	thumbnailSettle = 100 * time.Millisecond
@@ -1226,10 +1228,13 @@ func (b *browser) waitForSettle() {
 		return
 	}
 	if b.nextNeighbour() != "" {
-		b.trickle = time.NewTimer(trickleSpacing)
+		b.trickle = time.NewTimer(trickleWait())
 		b.trickleC = b.trickle.C
 	}
 }
+
+// trickleWait is the gap before the next background request.
+func trickleWait() time.Duration { return trickleSpacing + rand.N(trickleSpacing) }
 
 // nextNeighbour is the nearest row either side of the cursor not yet asked
 // about, empty where every row within reach has been.
