@@ -1099,3 +1099,91 @@ before.
 **What would reopen this:** a pane that can be made large enough for the
 difference to be visible, which would make the size of the source matter again
 rather than merely be available.
+
+---
+
+## ADR-022 — The rows beside the cursor are filled in, one at a time, and the settle is derived rather than chosen
+
+**Status:** accepted. It reverses the part of ADR-019 that refused to fetch a
+picture for a row nobody had looked at, and replaces the settle's constant
+with one derived from a measurement.
+
+### What prompted it
+
+Two things, and the second was raised by the person using it rather than
+found here.
+
+The first: the pause before a picture appeared was almost entirely the settle.
+A warm fetch of the address ADR-021 moved to takes about twenty milliseconds
+and a cold one under eighty. Against a quarter-second wait, the network was
+not what anybody was waiting for.
+
+The second: the settle does not reduce requests for somebody browsing
+deliberately. Stopping on each row for a second is a request a second, the
+same as it ever was. What the settle actually suppresses is the *held-key*
+case, where rows pass at the key repeat rate. For ordinary use it was buying
+delay and nothing else.
+
+### What was measured
+
+| | |
+|---|---|
+| key repeat interval, desktop default | 30 ms |
+| delay before a held key repeats | 500 ms |
+| picture fetch, warm connection | ~20 ms |
+| picture fetch, cold | 43–78 ms |
+| picture requests refused, ever | none; 36 of 36 answered 200 |
+
+The settle was 250 ms against a 30 ms repeat: eight times wider than the job
+needed.
+
+### What the earlier reasoning got wrong
+
+ADR-019 worried that a request per row reads as scanning. Two things weaken
+that now.
+
+The burst it feared was a burst of **404s** from sequential identifiers, and
+after ADR-021 there are no 404s — the address asked for is present for every
+video. And the refusal that prompted this whole line of work landed on the
+player path, a different host from the one pictures come from. The picture
+host has never refused this program.
+
+A browser opening one page of the same service fetches twenty to forty of
+these images at once. One at a time, spaced, is not that.
+
+### The decision
+
+The settle becomes 100 ms, which is three key repeats wide, so a held arrow
+still travels for free. The number is now derived from something measurable
+instead of chosen for feel.
+
+Once the row under the cursor is no longer owing, the rows within three either
+side are filled in: **one request at a time**, the next armed only when the
+last has landed, abandoned the moment the cursor moves. Stepping a row or two
+then draws a picture already held.
+
+### The argument against
+
+This fetches pictures for rows nobody has looked at, which is the thing
+ADR-019 declined, and this record should not pretend otherwise.
+
+What answers it is that for sequential movement it is not extra work but the
+same work earlier: walking down ten rows costs ten requests either way, and
+the fill is what makes the tenth instant rather than what adds to it. It is
+bounded three rows either side, inside a store already bounded at sixty. And
+there is never more than one request outstanding, so the shape on the wire is
+a trickle rather than a burst — which was the property the objection was
+really about.
+
+The honest residue: somebody who lands on a row and immediately leaves the
+program has paid for up to six pictures they never saw.
+
+### What survives it
+
+ADR-007 — still memory only, still nothing on disk, still bounded. ADR-012 —
+still one picture drawn, for one row; the fill changes what is held, never
+what is shown. And the held-key protection ADR-019 was written for, which is
+now pinned by a test against the repeat interval rather than by a comment.
+
+**What would reopen this:** the picture host rate-limiting or refusing, which
+would make the fill the first thing to remove.
