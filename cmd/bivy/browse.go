@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"strings"
@@ -19,22 +20,27 @@ import (
 	"github.com/bspeelm/bivy/internal/ytdlp"
 )
 
-// thumbnailSettle is how long the cursor holds still before its row is worth
-// a request, so that scrolling past a row costs nothing (ADR-019).
-const thumbnailSettle = 250 * time.Millisecond
+// How long the cursor holds still before its row is worth a request, three
+// key repeats wide; the floor on the gap between background requests, which
+// carry as much again in jitter so the fill keeps off a fixed rhythm; and how
+// far either side of the cursor those fill in (ADR-019, ADR-022).
+const (
+	thumbnailSettle = 100 * time.Millisecond
+	trickleSpacing  = 100 * time.Millisecond
+	trickleRadius   = 3
+)
 
-// shot is a picture the session is holding. wide records that the widescreen
-// size has been asked for, existing or not, so a row asks for it once.
+// shot is a picture the session is holding. asked records that the request
+// has been made, answered or not, so a row is asked about once.
 type shot struct {
-	data []byte
-	wide bool
+	data  []byte
+	asked bool
 }
 
 // arriving is a fetched picture on its way back into the loop.
 type arriving struct {
 	id   string
 	data []byte
-	wide bool
 	ok   bool
 }
 
@@ -58,8 +64,6 @@ type artist interface {
 	// Fetch returns a video's picture as the bytes a server sent: the size
 	// every video has, so one request and no 404 by design.
 	Fetch(ctx context.Context, videoID string) ([]byte, error)
-	// FetchWide returns the widescreen size, which older videos do not have.
-	FetchWide(ctx context.Context, videoID string) ([]byte, error)
 	// Draw turns those bytes into what the terminal understands, for cells of
 	// the size the terminal said they are.
 	Draw(data []byte, cols, rows int, cell graphics.Cell) (string, error)
@@ -70,10 +74,6 @@ type pictures struct{ feeds fetcher }
 
 func (p pictures) Fetch(ctx context.Context, videoID string) ([]byte, error) {
 	return p.feeds.Thumbnail(ctx, videoID)
-}
-
-func (p pictures) FetchWide(ctx context.Context, videoID string) ([]byte, error) {
-	return p.feeds.WideThumbnail(ctx, videoID)
 }
 
 func (p pictures) Draw(data []byte, cols, rows int, cell graphics.Cell) (string, error) {
@@ -146,7 +146,10 @@ type browser struct {
 	wanted  string
 	settle  *time.Timer
 	settleC <-chan time.Time
-	arrived chan arriving
+	// trickle fills in the rows beside the cursor, one at a time.
+	trickle  *time.Timer
+	trickleC <-chan time.Time
+	arrived  chan arriving
 
 	// viewing is the channel whose videos are on screen, empty on every other
 	// screen. query is what was searched for, empty on the dashboard;
@@ -230,6 +233,9 @@ func (b *browser) run(ctx context.Context) int {
 
 		case <-b.settleC:
 			b.fetchPicture(ctx)
+
+		case <-b.trickleC:
+			b.fetchNeighbour(ctx)
 
 		case a, open := <-b.arrived:
 			if !open {
@@ -1203,43 +1209,87 @@ func (b *browser) armPicture() {
 	}
 }
 
-// waitForSettle arms the wait while the row under the cursor has one owing.
+// waitForSettle arms the wait while the row under the cursor has one owing,
+// and otherwise the fill of the rows beside it. The cursor goes first.
 func (b *browser) waitForSettle() {
 	if b.settle != nil {
 		b.settle.Stop()
 	}
-	b.settleC = nil
+	if b.trickle != nil {
+		b.trickle.Stop()
+	}
+	b.settleC, b.trickleC = nil, nil
 	if b.app.art == nil || b.wanted == "" {
 		return
 	}
-	if held, ok := b.pictures[b.wanted]; ok && held.wide {
+	if held, ok := b.pictures[b.wanted]; !ok || !held.asked {
+		b.settle = time.NewTimer(b.app.settle)
+		b.settleC = b.settle.C
 		return
 	}
-	b.settle = time.NewTimer(b.app.settle)
-	b.settleC = b.settle.C
+	if b.nextNeighbour() != "" {
+		b.trickle = time.NewTimer(trickleWait())
+		b.trickleC = b.trickle.C
+	}
 }
 
-// fetchPicture asks for the row the cursor settled on: the size every video
-// has first, and the widescreen one only once that is already showing.
+// trickleWait is the gap before the next background request.
+func trickleWait() time.Duration { return trickleSpacing + rand.N(trickleSpacing) }
+
+// nextNeighbour is the nearest row either side of the cursor not yet asked
+// about, empty where every row within reach has been.
+func (b *browser) nextNeighbour() string {
+	for d := 1; d <= trickleRadius; d++ {
+		for _, at := range []int{b.selected - d, b.selected + d} {
+			if at < 0 || at >= len(b.rows) {
+				continue
+			}
+			id := b.rows[at].Video.ID
+			if id == "" {
+				continue
+			}
+			if held, ok := b.pictures[id]; ok && held.asked {
+				continue
+			}
+			return id
+		}
+	}
+	return ""
+}
+
+// fetchNeighbour fills in one row beside the cursor.
+func (b *browser) fetchNeighbour(ctx context.Context) {
+	b.trickleC = nil
+	if id := b.nextNeighbour(); id != "" {
+		b.fetch(ctx, id)
+	}
+}
+
+// fetchPicture asks for the row the cursor settled on, once.
 func (b *browser) fetchPicture(ctx context.Context) {
 	b.settleC = nil
-	id, art := b.wanted, b.app.art
-	if id == "" || art == nil {
+	if b.wanted != "" {
+		b.fetch(ctx, b.wanted)
+	}
+}
+
+// fetch makes the one request a row gets.
+func (b *browser) fetch(ctx context.Context, id string) {
+	art := b.app.art
+	if art == nil {
 		return
 	}
-	_, showing := b.pictures[id]
-	arrived := b.arrived
+	// Recorded before the request leaves, so whatever re-arms next does not
+	// ask again for a row already in flight.
+	held := b.pictures[id]
+	held.asked = true
+	b.remember(id, held)
 
+	arrived := b.arrived
 	go func() {
-		var data []byte
-		var err error
-		if showing {
-			data, err = art.FetchWide(ctx, id)
-		} else {
-			data, err = art.Fetch(ctx, id)
-		}
+		data, err := art.Fetch(ctx, id)
 		select {
-		case arrived <- arriving{id: id, data: data, wide: showing, ok: err == nil}:
+		case arrived <- arriving{id: id, data: data, ok: err == nil}:
 		case <-ctx.Done():
 		}
 	}()
@@ -1252,7 +1302,7 @@ func (b *browser) receive(a arriving) {
 		held.data = a.data
 	}
 	// Recorded either way: one attempt is all a picture gets.
-	held.wide = a.wide || !a.ok
+	held.asked = true
 	b.remember(a.id, held)
 
 	b.drawn = ""

@@ -33,24 +33,13 @@ func (v Video) URL() string { return "https://www.youtube.com/watch?v=" + v.ID }
 // supplied the entry, so a hostile feed cannot aim the fetch.
 const ThumbnailHost = "https://i.ytimg.com/vi/"
 
-// ThumbnailURL is the picture every video has: four-by-three with bars painted
-// top and bottom, and a third of the resolution. Asked for first because it is
-// never absent, so a row costs one request and no 404 (ADR-019).
+// ThumbnailURL is the picture every video has, in the shape a video actually
+// is. Never absent, so a row costs one request and no 404 (ADR-021).
 func ThumbnailURL(videoID string) string {
 	if !IsVideoID(videoID) {
 		return ""
 	}
-	return ThumbnailHost + videoID + "/hqdefault.jpg"
-}
-
-// WideThumbnailURL is the shape a video actually is. Older videos never had
-// one and answer 404, so it is a second request made only for a row somebody
-// has settled on.
-func WideThumbnailURL(videoID string) string {
-	if !IsVideoID(videoID) {
-		return ""
-	}
-	return ThumbnailHost + videoID + "/hq720.jpg"
+	return ThumbnailHost + videoID + "/mqdefault.jpg"
 }
 
 // Channel is a channel: the entries its feed currently carries when it came

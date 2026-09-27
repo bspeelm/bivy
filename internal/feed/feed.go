@@ -167,11 +167,6 @@ func (c *Client) Thumbnail(ctx context.Context, videoID string) ([]byte, error) 
 	return c.picture(ctx, media.ThumbnailURL(videoID), videoID)
 }
 
-// WideThumbnail fetches the widescreen picture, which older videos 404 for.
-func (c *Client) WideThumbnail(ctx context.Context, videoID string) ([]byte, error) {
-	return c.picture(ctx, media.WideThumbnailURL(videoID), videoID)
-}
-
 // picture is one attempt: a picture is cosmetic, and a row the cursor has
 // left is not worth a second ask.
 func (c *Client) picture(ctx context.Context, target, videoID string) ([]byte, error) {

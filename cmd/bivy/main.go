@@ -50,7 +50,6 @@ type fetcher interface {
 	Fetch(ctx context.Context, channelID string) (media.Channel, error)
 	Resolve(ctx context.Context, handle string) (string, error)
 	Thumbnail(ctx context.Context, videoID string) ([]byte, error)
-	WideThumbnail(ctx context.Context, videoID string) ([]byte, error)
 }
 
 type app struct {

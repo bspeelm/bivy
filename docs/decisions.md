@@ -1022,3 +1022,168 @@ taking. It is the one that reduces uniqueness without asserting anything false.
 refused where the same request without it is not, which is measurable and has
 not been measured.
 
+
+---
+
+## ADR-021 — One picture per row, in the shape the pane is, rather than a better one after it
+
+**Status:** accepted. It amends ADR-019, which stands as the record of why the
+pacing exists; only the number of requests and the address change.
+
+ADR-019 moved the first request to an address that always exists, so that a row
+cost one request and no 404, and made the widescreen size a second request for
+rows somebody had settled on. The pacing was right. The address was not.
+
+### What prompted it
+
+Pictures arrived in two visible stages and the second one was not a
+refinement — it was a different shape.
+
+`ArtBox` sizes the pane sixteen-by-nine. The address ADR-019 chose,
+`hqdefault`, is four-by-three with bars painted top and bottom. `scale`
+preserves the aspect ratio and `letterbox` centres what it is given, so a
+four-by-three picture in a sixteen-by-nine pane is drawn pillarboxed at about
+seventy percent of the width available. The widescreen second request then
+filled the pane properly, and the picture grew by a third in front of whoever
+was watching.
+
+So the sequence for every new row was: nothing for a quarter second, a small
+picture, another quarter second, and then the real one.
+
+### What was measured
+
+| address | pixels | shape | bytes | present |
+|---|---|---|---|---|
+| `mqdefault` | 320x180 | sixteen-by-nine | 11 KiB | 36 of 36 sampled |
+| `hqdefault` | 480x360 | four-by-three, bars | 16 KiB | always |
+| `hq720` | 1280x720 | sixteen-by-nine | 144 KiB | 33 of 36 sampled |
+
+Two things in that table were not known when ADR-019 was written. There is an
+address that is both always present and already the right shape, and it is the
+smallest of the three. And "older videos never had" the widescreen size is too
+strong: it was missing for three videos in thirty-six, not for most.
+
+The pane is at most forty-eight columns wide, which on an assumed cell is 384
+pixels. A 320-pixel source covers that. A 1280-pixel source is discarded down
+to it.
+
+### The decision
+
+One request per row, to `mqdefault`. The widescreen request is gone.
+
+### The argument against
+
+The picture is slightly softer. A 320-pixel source upscaled to a 384-pixel box
+is not as crisp as a 1280-pixel source scaled down to it, and on a terminal
+reporting larger cells the gap widens.
+
+That is real, and it is the trade. It buys a picture that is the right shape
+the moment it appears, half the requests, a fourteenth of the bytes, and no
+404s at all — against a service that had already refused this network once for
+how its requests looked. Softness is a cost somebody can see and decide about.
+A request pattern that gets an address refused is one they cannot.
+
+### What survives it
+
+All of ADR-019's pacing: a row is fetched only once the cursor has held still
+on it, the fetch is off the draw path, and scrolling past a row still costs
+nothing. ADR-007 is untouched — pictures are still held in memory for the
+session, bounded, and written nowhere. ADR-012 is untouched: one picture, for
+one row.
+
+### What it costs, said on screen
+
+Nothing is said on screen. A picture that has not arrived is an empty box, as
+before.
+
+**What would reopen this:** a pane that can be made large enough for the
+difference to be visible, which would make the size of the source matter again
+rather than merely be available.
+
+---
+
+## ADR-022 — The rows beside the cursor are filled in, one at a time, and the settle is derived rather than chosen
+
+**Status:** accepted. It reverses the part of ADR-019 that refused to fetch a
+picture for a row nobody had looked at, and replaces the settle's constant
+with one derived from a measurement.
+
+### What prompted it
+
+Two things, and the second was raised by the person using it rather than
+found here.
+
+The first: the pause before a picture appeared was almost entirely the settle.
+A warm fetch of the address ADR-021 moved to takes about twenty milliseconds
+and a cold one under eighty. Against a quarter-second wait, the network was
+not what anybody was waiting for.
+
+The second: the settle does not reduce requests for somebody browsing
+deliberately. Stopping on each row for a second is a request a second, the
+same as it ever was. What the settle actually suppresses is the *held-key*
+case, where rows pass at the key repeat rate. For ordinary use it was buying
+delay and nothing else.
+
+### What was measured
+
+| | |
+|---|---|
+| key repeat interval, desktop default | 30 ms |
+| delay before a held key repeats | 500 ms |
+| picture fetch, warm connection | ~20 ms |
+| picture fetch, cold | 43–78 ms |
+| picture requests refused, ever | none; 36 of 36 answered 200 |
+
+The settle was 250 ms against a 30 ms repeat: eight times wider than the job
+needed.
+
+### What the earlier reasoning got wrong
+
+ADR-019 worried that a request per row reads as scanning. Two things weaken
+that now.
+
+The burst it feared was a burst of **404s** from sequential identifiers, and
+after ADR-021 there are no 404s — the address asked for is present for every
+video. And the refusal that prompted this whole line of work landed on the
+player path, a different host from the one pictures come from. The picture
+host has never refused this program.
+
+A browser opening one page of the same service fetches twenty to forty of
+these images at once. One at a time, spaced, is not that.
+
+### The decision
+
+The settle becomes 100 ms, which is three key repeats wide, so a held arrow
+still travels for free. The number is now derived from something measurable
+instead of chosen for feel.
+
+Once the row under the cursor is no longer owing, the rows within three either
+side are filled in: **one request at a time**, the next armed only when the
+last has landed, abandoned the moment the cursor moves. Stepping a row or two
+then draws a picture already held.
+
+### The argument against
+
+This fetches pictures for rows nobody has looked at, which is the thing
+ADR-019 declined, and this record should not pretend otherwise.
+
+What answers it is that for sequential movement it is not extra work but the
+same work earlier: walking down ten rows costs ten requests either way, and
+the fill is what makes the tenth instant rather than what adds to it. It is
+bounded three rows either side, inside a store already bounded at sixty. And
+there is never more than one request outstanding, so the shape on the wire is
+a trickle rather than a burst — which was the property the objection was
+really about.
+
+The honest residue: somebody who lands on a row and immediately leaves the
+program has paid for up to six pictures they never saw.
+
+### What survives it
+
+ADR-007 — still memory only, still nothing on disk, still bounded. ADR-012 —
+still one picture drawn, for one row; the fill changes what is held, never
+what is shown. And the held-key protection ADR-019 was written for, which is
+now pinned by a test against the repeat interval rather than by a comment.
+
+**What would reopen this:** the picture host rate-limiting or refusing, which
+would make the fill the first thing to remove.

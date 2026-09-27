@@ -171,36 +171,41 @@ func (p *fakePlayer) Play(v media.Video) error {
 type fakeArt struct {
 	mu      sync.Mutex
 	fetched []string
-	wide    []string
+	at      []time.Time
 	fail    error
-	noWide  bool
+}
+
+// gaps is how long passed between one request leaving and the next.
+func (a *fakeArt) gaps() []time.Duration {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var out []time.Duration
+	for i := 1; i < len(a.at); i++ {
+		out = append(out, a.at[i].Sub(a.at[i-1]))
+	}
+	return out
+}
+
+// countOf is how many times a row was asked about.
+func countOf(all []string, want string) int {
+	n := 0
+	for _, got := range all {
+		if got == want {
+			n++
+		}
+	}
+	return n
 }
 
 func (a *fakeArt) Fetch(_ context.Context, videoID string) ([]byte, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.fetched = append(a.fetched, videoID)
+	a.at = append(a.at, time.Now())
 	if a.fail != nil {
 		return nil, a.fail
 	}
 	return []byte("picture of " + videoID), nil
-}
-
-// The widescreen size, which older videos do not have and answer 404 for.
-func (a *fakeArt) FetchWide(_ context.Context, videoID string) ([]byte, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.wide = append(a.wide, videoID)
-	if a.fail != nil || a.noWide {
-		return nil, errors.New("no widescreen picture for " + videoID)
-	}
-	return []byte("wide picture of " + videoID), nil
-}
-
-func (a *fakeArt) askedWide() []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return append([]string(nil), a.wide...)
 }
 
 func (a *fakeArt) Draw(data []byte, cols, rows int, cell graphics.Cell) (string, error) {
@@ -1377,17 +1382,13 @@ func TestOnlyTheRowUnderTheCursorGetsAPicture(t *testing.T) {
 
 	b.start(t)
 	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
-
-	if got := b.art.asked(); len(got) != 1 || got[0] != "aaaaaaaaaaa" {
-		t.Errorf("fetched %v, want only the row under the cursor", got)
-	}
-
 	b.screen.press(named(term.KeyDown))
 	b.eventuallyArt(t, "picture of ccccccccccc")
 	b.quit(t)
 
-	if got := len(b.art.asked()); got != 2 {
-		t.Errorf("%d pictures fetched after moving one row, want 2", got)
+	// The rows beside the cursor are filled in behind it, never ahead of it.
+	if got := b.art.asked(); len(got) == 0 || got[0] != "aaaaaaaaaaa" {
+		t.Errorf("fetched %v, want the row under the cursor first", got)
 	}
 }
 
@@ -1407,8 +1408,10 @@ func TestAPictureIsFetchedOnce(t *testing.T) {
 	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
 	b.quit(t)
 
-	if got := len(b.art.asked()); got != 2 {
-		t.Errorf("%d fetches for two rows visited twice, want 2", got)
+	for _, id := range []string{"aaaaaaaaaaa", "ccccccccccc"} {
+		if got := countOf(b.art.asked(), id); got != 1 {
+			t.Errorf("%s was fetched %d times, want once", id, got)
+		}
 	}
 }
 
@@ -2460,63 +2463,122 @@ func TestScrollingPastRowsFetchesNothing(t *testing.T) {
 	b.eventuallyArt(t, "picture of ccccccccccc")
 	b.quit(t)
 
-	if got := b.art.asked(); len(got) != 1 || got[0] != "ccccccccccc" {
-		t.Errorf("fetched %v across three rows, want only the row it stopped on", got)
+	if got := b.art.asked(); len(got) == 0 || got[0] != "ccccccccccc" {
+		t.Errorf("fetched %v across three rows, want the row it stopped on first", got)
 	}
 }
 
-// The widescreen size is a second request, made only once the picture that
-// always exists is already on screen.
-func TestTheWidescreenPictureIsASecondRequest(t *testing.T) {
+// A row used to cost two requests to two addresses, and the first was
+// four-by-three in a sixteen-by-nine pane, so the second visibly replaced it
+// a moment later. One address, the shape the pane is (ADR-021).
+func TestARowCostsOneRequest(t *testing.T) {
 	b := newBrowser(t)
 	b.screen.draws = graphics.Kitty
 	b.app.art = b.art
+	b.app.settle = 50 * time.Millisecond
 	b.run(t, "follow", chanA)
 
 	b.start(t)
 	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
-	b.eventuallyArt(t, "wide picture of aaaaaaaaaaa")
+
+	// Long enough that a second wait would have expired, had one been armed.
+	time.Sleep(300 * time.Millisecond)
 	b.quit(t)
 
-	if got := b.art.asked(); len(got) != 1 || got[0] != "aaaaaaaaaaa" {
-		t.Errorf("asked %v for the size every video has, want one request", got)
-	}
-	if got := b.art.askedWide(); len(got) != 1 || got[0] != "aaaaaaaaaaa" {
-		t.Errorf("asked %v for the widescreen size, want one request", got)
+	if got := countOf(b.art.asked(), "aaaaaaaaaaa"); got != 1 {
+		t.Errorf("the row was asked about %d times, want one request", got)
 	}
 }
 
-// Older videos never had a widescreen picture and answer 404. Asking once is
-// the cost of finding out; asking every time the cursor returns is the 404
-// burst this was meant to stop.
-func TestAVideoWithNoWidescreenPictureIsAskedOnce(t *testing.T) {
+// eventuallyAsked waits for a row to have been asked about at all.
+func (b *browserHarness) eventuallyAsked(t *testing.T, want string) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		if countOf(b.art.asked(), want) > 0 {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("%s was never asked about; asked %v", want, b.art.asked())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+// Stepping to the next row used to wait the settle and a round trip over
+// again. The rows either side are filled in while nothing else is happening,
+// so the step draws what is already held (ADR-022).
+func TestTheRowsBesideTheCursorAreFilledInBehindIt(t *testing.T) {
 	b := newBrowser(t)
 	b.screen.draws = graphics.Kitty
-	b.art.noWide = true
 	b.app.art = b.art
 	b.run(t, "follow", chanA)
 
 	b.start(t)
 	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
+
+	// No key is pressed: the row below is filled in on its own.
+	b.eventuallyAsked(t, "ccccccccccc")
+
 	b.screen.press(named(term.KeyDown))
 	b.eventuallyArt(t, "picture of ccccccccccc")
-	b.screen.press(named(term.KeyUp))
+	b.quit(t)
+}
+
+// Spaced enough not to read as a burst: the next request is armed only once
+// the last has landed, so one is in flight at a time and the gap between any
+// two is at least the spacing, jitter on top (ADR-022).
+func TestTheFillIsSpacedAndOneAtATime(t *testing.T) {
+	b := newBrowser(t)
+	b.screen.draws = graphics.Kitty
+	b.app.art = b.art
+	b.run(t, "follow", chanA)
+	b.run(t, "follow", chanB)
+
+	b.start(t)
 	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
+	// Long enough for the fill to have worked through the rows in reach.
+	time.Sleep(600 * time.Millisecond)
 	b.quit(t)
 
-	for _, id := range []string{"aaaaaaaaaaa", "ccccccccccc"} {
-		if got := countOf(b.art.askedWide(), id); got != 1 {
-			t.Errorf("asked %d times for the widescreen %s, want once", got, id)
+	gaps := b.art.gaps()
+	if len(gaps) < 2 {
+		t.Fatalf("only %d gaps between requests; the fill did not run", len(gaps))
+	}
+	// Timers do not fire early, but the clock is coarse on some machines.
+	const slack = 20 * time.Millisecond
+	for i, gap := range gaps {
+		if gap < trickleSpacing-slack {
+			t.Errorf("request %d followed the one before it after %s, want at least %s",
+				i+1, gap, trickleSpacing)
 		}
 	}
 }
 
-func countOf(all []string, want string) int {
-	n := 0
-	for _, s := range all {
-		if s == want {
-			n++
+// The feeds are jittered so they keep off a fixed rhythm, and the fill is
+// the busiest path in the program; a metronome is the easier pattern to spot.
+func TestTheFillKeepsOffAFixedRhythm(t *testing.T) {
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 1000; i++ {
+		w := trickleWait()
+		if w < trickleSpacing || w >= 2*trickleSpacing {
+			t.Fatalf("a wait of %s is outside [%s, %s)", w, trickleSpacing, 2*trickleSpacing)
 		}
+		seen[w] = true
 	}
-	return n
+	if len(seen) < 100 {
+		t.Errorf("1000 waits took %d distinct values; that is close to a metronome", len(seen))
+	}
+}
+
+// The settle is derived rather than chosen: it has to outlast the gap between
+// rows while an arrow key is held, or a held key fetches every row it passes.
+// Thirty milliseconds is the repeat interval a desktop ships with.
+func TestTheSettleOutlastsAHeldKey(t *testing.T) {
+	const keyRepeat = 30 * time.Millisecond
+	if thumbnailSettle < 3*keyRepeat {
+		t.Errorf("the settle is %s, which is under three key repeats (%s)",
+			thumbnailSettle, 3*keyRepeat)
+	}
 }

@@ -487,11 +487,8 @@ func TestThumbnail(t *testing.T) {
 	})
 	// The thumbnail host is not one of the bases the test server stands in
 	// for, so this asserts what it builds rather than what it fetches.
-	if got := media.ThumbnailURL("dQw4w9WgXcQ"); got != "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg" {
+	if got := media.ThumbnailURL("dQw4w9WgXcQ"); got != "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg" {
 		t.Errorf("thumbnail address = %q", got)
-	}
-	if got := media.WideThumbnailURL("dQw4w9WgXcQ"); got != "https://i.ytimg.com/vi/dQw4w9WgXcQ/hq720.jpg" {
-		t.Errorf("wide thumbnail address = %q", got)
 	}
 	_ = asked
 	_ = c
@@ -511,17 +508,14 @@ func TestThumbnailRefusesSomethingThatIsNotAVideo(t *testing.T) {
 	}
 }
 
-// Scrolling a list of older videos used to send a guaranteed 404 per row,
-// because the widescreen size was asked for first and older videos never had
-// one. A burst of 404s from one address reads as scanning (ADR-019).
+// A row is one request, to the address that is always present and already
+// the shape the pane is. Asking a second address for a better picture meant
+// a visible replacement a moment later, and a 404 for the videos that never
+// had one (ADR-021).
 func TestAThumbnailIsOneRequestToTheSizeThatAlwaysExists(t *testing.T) {
 	var asked []string
 	c := against(t, func(w http.ResponseWriter, r *http.Request) {
 		asked = append(asked, r.URL.Path)
-		if strings.Contains(r.URL.Path, "hq720") {
-			http.NotFound(w, r)
-			return
-		}
 		_, _ = w.Write([]byte("a picture"))
 	})
 
@@ -535,24 +529,7 @@ func TestAThumbnailIsOneRequestToTheSizeThatAlwaysExists(t *testing.T) {
 	if len(asked) != 1 {
 		t.Errorf("the host was asked %d times for %v; want once", len(asked), asked)
 	}
-	if strings.Contains(asked[0], "hq720") {
-		t.Errorf("asked for the size older videos do not have: %q", asked[0])
-	}
-}
-
-// The better picture is a second, separate ask, made only for a row somebody
-// settled on — and a video that never had one is allowed to say so.
-func TestTheWideThumbnailIsAskedForSeparately(t *testing.T) {
-	var asked []string
-	c := against(t, func(w http.ResponseWriter, r *http.Request) {
-		asked = append(asked, r.URL.Path)
-		http.NotFound(w, r)
-	})
-
-	if _, err := c.WideThumbnail(context.Background(), "aaaaaaaaaaa"); err == nil {
-		t.Fatal("a missing widescreen picture reported success")
-	}
-	if len(asked) != 1 || !strings.Contains(asked[0], "hq720") {
-		t.Errorf("asked %v, want one request for the widescreen size", asked)
+	if !strings.Contains(asked[0], "mqdefault") {
+		t.Errorf("asked %q, want the size every video has", asked[0])
 	}
 }
