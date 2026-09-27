@@ -21,7 +21,7 @@ const sampleFeed = `<?xml version="1.0" encoding="UTF-8"?>
     <author><name>A Channel</name></author>
     <published>2026-09-01T12:00:00+00:00</published>
     <media:group>
-      <media:thumbnail url="https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg"/>
+      <media:thumbnail url="https://i.ytimg.com/vi/aaaaaaaaaaa/mqdefault.jpg"/>
     </media:group>
   </entry>
   <entry>
@@ -32,7 +32,7 @@ const sampleFeed = `<?xml version="1.0" encoding="UTF-8"?>
     <author><name>A Channel</name></author>
     <published>2026-09-05T09:30:00+00:00</published>
     <media:group>
-      <media:thumbnail url="https://i.ytimg.com/vi/bbbbbbbbbbb/hqdefault.jpg"/>
+      <media:thumbnail url="https://i.ytimg.com/vi/bbbbbbbbbbb/mqdefault.jpg"/>
     </media:group>
   </entry>
 </feed>`
@@ -65,7 +65,7 @@ func TestParseReadsAFeed(t *testing.T) {
 	if got, want := v.Published, time.Date(2026, 9, 5, 9, 30, 0, 0, time.UTC); !got.Equal(want) {
 		t.Errorf("published = %s, want %s", got, want)
 	}
-	if got, want := v.Thumbnail, "https://i.ytimg.com/vi/bbbbbbbbbbb/hqdefault.jpg"; got != want {
+	if got, want := v.Thumbnail, "https://i.ytimg.com/vi/bbbbbbbbbbb/mqdefault.jpg"; got != want {
 		t.Errorf("thumbnail = %q, want %q", got, want)
 	}
 }
@@ -167,7 +167,7 @@ func TestParseDerivesTheThumbnailAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := ch.Videos[0].Thumbnail, "https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg"; got != want {
+	if got, want := ch.Videos[0].Thumbnail, "https://i.ytimg.com/vi/aaaaaaaaaaa/mqdefault.jpg"; got != want {
 		t.Errorf("thumbnail = %q, want %q", got, want)
 	}
 }

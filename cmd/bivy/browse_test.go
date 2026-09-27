@@ -171,9 +171,7 @@ func (p *fakePlayer) Play(v media.Video) error {
 type fakeArt struct {
 	mu      sync.Mutex
 	fetched []string
-	wide    []string
 	fail    error
-	noWide  bool
 }
 
 func (a *fakeArt) Fetch(_ context.Context, videoID string) ([]byte, error) {
@@ -184,23 +182,6 @@ func (a *fakeArt) Fetch(_ context.Context, videoID string) ([]byte, error) {
 		return nil, a.fail
 	}
 	return []byte("picture of " + videoID), nil
-}
-
-// The widescreen size, which older videos do not have and answer 404 for.
-func (a *fakeArt) FetchWide(_ context.Context, videoID string) ([]byte, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.wide = append(a.wide, videoID)
-	if a.fail != nil || a.noWide {
-		return nil, errors.New("no widescreen picture for " + videoID)
-	}
-	return []byte("wide picture of " + videoID), nil
-}
-
-func (a *fakeArt) askedWide() []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return append([]string(nil), a.wide...)
 }
 
 func (a *fakeArt) Draw(data []byte, cols, rows int, cell graphics.Cell) (string, error) {
@@ -2465,58 +2446,24 @@ func TestScrollingPastRowsFetchesNothing(t *testing.T) {
 	}
 }
 
-// The widescreen size is a second request, made only once the picture that
-// always exists is already on screen.
-func TestTheWidescreenPictureIsASecondRequest(t *testing.T) {
+// A row used to cost two requests to two addresses, and the first was
+// four-by-three in a sixteen-by-nine pane, so the second visibly replaced it
+// a moment later. One address, the shape the pane is (ADR-021).
+func TestARowCostsOneRequest(t *testing.T) {
 	b := newBrowser(t)
 	b.screen.draws = graphics.Kitty
 	b.app.art = b.art
+	b.app.settle = 50 * time.Millisecond
 	b.run(t, "follow", chanA)
 
 	b.start(t)
 	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
-	b.eventuallyArt(t, "wide picture of aaaaaaaaaaa")
+
+	// Long enough that a second wait would have expired, had one been armed.
+	time.Sleep(300 * time.Millisecond)
 	b.quit(t)
 
 	if got := b.art.asked(); len(got) != 1 || got[0] != "aaaaaaaaaaa" {
-		t.Errorf("asked %v for the size every video has, want one request", got)
+		t.Errorf("asked %v, want one request for the row", got)
 	}
-	if got := b.art.askedWide(); len(got) != 1 || got[0] != "aaaaaaaaaaa" {
-		t.Errorf("asked %v for the widescreen size, want one request", got)
-	}
-}
-
-// Older videos never had a widescreen picture and answer 404. Asking once is
-// the cost of finding out; asking every time the cursor returns is the 404
-// burst this was meant to stop.
-func TestAVideoWithNoWidescreenPictureIsAskedOnce(t *testing.T) {
-	b := newBrowser(t)
-	b.screen.draws = graphics.Kitty
-	b.art.noWide = true
-	b.app.art = b.art
-	b.run(t, "follow", chanA)
-
-	b.start(t)
-	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
-	b.screen.press(named(term.KeyDown))
-	b.eventuallyArt(t, "picture of ccccccccccc")
-	b.screen.press(named(term.KeyUp))
-	b.eventuallyArt(t, "picture of aaaaaaaaaaa")
-	b.quit(t)
-
-	for _, id := range []string{"aaaaaaaaaaa", "ccccccccccc"} {
-		if got := countOf(b.art.askedWide(), id); got != 1 {
-			t.Errorf("asked %d times for the widescreen %s, want once", got, id)
-		}
-	}
-}
-
-func countOf(all []string, want string) int {
-	n := 0
-	for _, s := range all {
-		if s == want {
-			n++
-		}
-	}
-	return n
 }

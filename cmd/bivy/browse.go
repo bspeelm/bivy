@@ -23,18 +23,17 @@ import (
 // a request, so that scrolling past a row costs nothing (ADR-019).
 const thumbnailSettle = 250 * time.Millisecond
 
-// shot is a picture the session is holding. wide records that the widescreen
-// size has been asked for, existing or not, so a row asks for it once.
+// shot is a picture the session is holding. asked records that the request
+// has been made, answered or not, so a row is asked about once.
 type shot struct {
-	data []byte
-	wide bool
+	data  []byte
+	asked bool
 }
 
 // arriving is a fetched picture on its way back into the loop.
 type arriving struct {
 	id   string
 	data []byte
-	wide bool
 	ok   bool
 }
 
@@ -58,8 +57,6 @@ type artist interface {
 	// Fetch returns a video's picture as the bytes a server sent: the size
 	// every video has, so one request and no 404 by design.
 	Fetch(ctx context.Context, videoID string) ([]byte, error)
-	// FetchWide returns the widescreen size, which older videos do not have.
-	FetchWide(ctx context.Context, videoID string) ([]byte, error)
 	// Draw turns those bytes into what the terminal understands, for cells of
 	// the size the terminal said they are.
 	Draw(data []byte, cols, rows int, cell graphics.Cell) (string, error)
@@ -70,10 +67,6 @@ type pictures struct{ feeds fetcher }
 
 func (p pictures) Fetch(ctx context.Context, videoID string) ([]byte, error) {
 	return p.feeds.Thumbnail(ctx, videoID)
-}
-
-func (p pictures) FetchWide(ctx context.Context, videoID string) ([]byte, error) {
-	return p.feeds.WideThumbnail(ctx, videoID)
 }
 
 func (p pictures) Draw(data []byte, cols, rows int, cell graphics.Cell) (string, error) {
@@ -1212,34 +1205,26 @@ func (b *browser) waitForSettle() {
 	if b.app.art == nil || b.wanted == "" {
 		return
 	}
-	if held, ok := b.pictures[b.wanted]; ok && held.wide {
+	if held, ok := b.pictures[b.wanted]; ok && held.asked {
 		return
 	}
 	b.settle = time.NewTimer(b.app.settle)
 	b.settleC = b.settle.C
 }
 
-// fetchPicture asks for the row the cursor settled on: the size every video
-// has first, and the widescreen one only once that is already showing.
+// fetchPicture asks for the row the cursor settled on, once.
 func (b *browser) fetchPicture(ctx context.Context) {
 	b.settleC = nil
 	id, art := b.wanted, b.app.art
 	if id == "" || art == nil {
 		return
 	}
-	_, showing := b.pictures[id]
 	arrived := b.arrived
 
 	go func() {
-		var data []byte
-		var err error
-		if showing {
-			data, err = art.FetchWide(ctx, id)
-		} else {
-			data, err = art.Fetch(ctx, id)
-		}
+		data, err := art.Fetch(ctx, id)
 		select {
-		case arrived <- arriving{id: id, data: data, wide: showing, ok: err == nil}:
+		case arrived <- arriving{id: id, data: data, ok: err == nil}:
 		case <-ctx.Done():
 		}
 	}()
@@ -1252,7 +1237,7 @@ func (b *browser) receive(a arriving) {
 		held.data = a.data
 	}
 	// Recorded either way: one attempt is all a picture gets.
-	held.wide = a.wide || !a.ok
+	held.asked = true
 	b.remember(a.id, held)
 
 	b.drawn = ""

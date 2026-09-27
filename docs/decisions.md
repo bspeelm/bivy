@@ -1022,3 +1022,80 @@ taking. It is the one that reduces uniqueness without asserting anything false.
 refused where the same request without it is not, which is measurable and has
 not been measured.
 
+
+---
+
+## ADR-021 — One picture per row, in the shape the pane is, rather than a better one after it
+
+**Status:** accepted. It amends ADR-019, which stands as the record of why the
+pacing exists; only the number of requests and the address change.
+
+ADR-019 moved the first request to an address that always exists, so that a row
+cost one request and no 404, and made the widescreen size a second request for
+rows somebody had settled on. The pacing was right. The address was not.
+
+### What prompted it
+
+Pictures arrived in two visible stages and the second one was not a
+refinement — it was a different shape.
+
+`ArtBox` sizes the pane sixteen-by-nine. The address ADR-019 chose,
+`hqdefault`, is four-by-three with bars painted top and bottom. `scale`
+preserves the aspect ratio and `letterbox` centres what it is given, so a
+four-by-three picture in a sixteen-by-nine pane is drawn pillarboxed at about
+seventy percent of the width available. The widescreen second request then
+filled the pane properly, and the picture grew by a third in front of whoever
+was watching.
+
+So the sequence for every new row was: nothing for a quarter second, a small
+picture, another quarter second, and then the real one.
+
+### What was measured
+
+| address | pixels | shape | bytes | present |
+|---|---|---|---|---|
+| `mqdefault` | 320x180 | sixteen-by-nine | 11 KiB | 36 of 36 sampled |
+| `hqdefault` | 480x360 | four-by-three, bars | 16 KiB | always |
+| `hq720` | 1280x720 | sixteen-by-nine | 144 KiB | 33 of 36 sampled |
+
+Two things in that table were not known when ADR-019 was written. There is an
+address that is both always present and already the right shape, and it is the
+smallest of the three. And "older videos never had" the widescreen size is too
+strong: it was missing for three videos in thirty-six, not for most.
+
+The pane is at most forty-eight columns wide, which on an assumed cell is 384
+pixels. A 320-pixel source covers that. A 1280-pixel source is discarded down
+to it.
+
+### The decision
+
+One request per row, to `mqdefault`. The widescreen request is gone.
+
+### The argument against
+
+The picture is slightly softer. A 320-pixel source upscaled to a 384-pixel box
+is not as crisp as a 1280-pixel source scaled down to it, and on a terminal
+reporting larger cells the gap widens.
+
+That is real, and it is the trade. It buys a picture that is the right shape
+the moment it appears, half the requests, a fourteenth of the bytes, and no
+404s at all — against a service that had already refused this network once for
+how its requests looked. Softness is a cost somebody can see and decide about.
+A request pattern that gets an address refused is one they cannot.
+
+### What survives it
+
+All of ADR-019's pacing: a row is fetched only once the cursor has held still
+on it, the fetch is off the draw path, and scrolling past a row still costs
+nothing. ADR-007 is untouched — pictures are still held in memory for the
+session, bounded, and written nowhere. ADR-012 is untouched: one picture, for
+one row.
+
+### What it costs, said on screen
+
+Nothing is said on screen. A picture that has not arrived is an empty box, as
+before.
+
+**What would reopen this:** a pane that can be made large enough for the
+difference to be visible, which would make the size of the source matter again
+rather than merely be available.
