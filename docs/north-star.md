@@ -37,9 +37,11 @@ Concretely, and each of these is a test rather than an aspiration:
   One package touches the network, so a stranger can check that claim rather
   than believe it.
 - **No residue.** Two directories, listed in the plan's §8, and nothing else
-  ever. The isolation suite runs a first launch against a scratch home
-  directory and asserts the write set matches that list exactly. No cache, no
-  partial files, nothing to sweep up afterwards.
+  that bivy keeps. The isolation suite runs a first launch against a scratch
+  home directory and asserts the write set matches that list exactly. No cache,
+  no partial files, nothing to sweep up afterwards. The one file written outside
+  them is a screenshot, which mpv writes where bivy points it and only when
+  somebody asks for one (ADR-023).
 - **Nothing of anyone else's is touched.** mpv is launched with `--no-config`
   and explicit flags; the user's own mpv setup is left exactly as it was found.
 - **Honest about the terminal.** The image capability is probed once and
@@ -51,8 +53,8 @@ Concretely, and each of these is a test rather than an aspiration:
 Not "it has few users" — the audience is small by construction. These:
 
 - A request goes out that identifies the person running it.
-- Something is written outside the two directories in §8, or something survives
-  an uninstall.
+- Something of bivy's own is written outside the two directories in §8, or
+  something survives an uninstall.
 - A stream URL or any other secret-shaped string reaches an `argv`, where every
   account on the machine can read it.
 - Someone reads the code and cannot tell why a decision was made, because it

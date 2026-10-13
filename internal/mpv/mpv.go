@@ -91,6 +91,9 @@ type Options struct {
 	// XDG_RUNTIME_DIR, or the system temporary directory where that is unset —
 	// which is every Mac.
 	RuntimeDir string
+	// ShotDir is where mpv puts a screenshot. Empty means the pictures
+	// directory (ADR-023).
+	ShotDir string
 }
 
 // Player is a running mpv.
@@ -170,7 +173,8 @@ func Start(ctx context.Context, opt Options) (*Player, error) {
 		return nil, err
 	}
 
-	args := append(append([]string(nil), opt.Args...), flags(socket, cookies, keepsWindow(ctx, binary))...)
+	args := append(append([]string(nil), opt.Args...),
+		flags(socket, cookies, shotDir(opt.ShotDir), keepsWindow(ctx, binary))...)
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = opt.Env
 	// Streams left nil, which exec connects to the null device: mpv's own
@@ -226,7 +230,7 @@ func Start(ctx context.Context, opt Options) (*Player, error) {
 // sitting there for the whole session, including after every video ends. On a
 // compositor that offers no decorations it has no title bar to close it by
 // either, so it is a pane the user cannot get rid of and did not ask for.
-func flags(socket, cookies string, keepWindow bool) []string {
+func flags(socket, cookies, shots string, keepWindow bool) []string {
 	base := []string{
 		// ADR-006: the user's own mpv setup is neither read nor written.
 		"--no-config",
@@ -248,6 +252,12 @@ func flags(socket, cookies string, keepWindow bool) []string {
 		"--ytdl-raw-options=cookies=" + cookies,
 	}
 
+	// mpv's screenshot key writes to the working directory it inherited, which
+	// is wherever bivy happened to be started from (ADR-023).
+	if shots != "" {
+		base = append(base, "--screenshot-directory="+shots)
+	}
+
 	// One window serves the whole session, so the size its watcher chose
 	// outlives the video they chose it during.
 	if keepWindow {
@@ -265,6 +275,23 @@ func keepsWindow(ctx context.Context, binary string) bool {
 		return false
 	}
 	return !OlderThan(v, keepsWindowSince)
+}
+
+// shotDir is where a screenshot goes: what the caller asked for, else what the
+// person's desktop says, else the conventional directory on both platforms.
+// Empty where no home can be found, which leaves mpv's own default alone.
+func shotDir(override string) string {
+	if filepath.IsAbs(override) {
+		return override
+	}
+	if d := os.Getenv("XDG_PICTURES_DIR"); filepath.IsAbs(d) {
+		return d
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, "Pictures")
 }
 
 func runtimeDir(override string) string {
