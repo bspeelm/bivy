@@ -1187,3 +1187,85 @@ now pinned by a test against the repeat interval rather than by a comment.
 
 **What would reopen this:** the picture host rate-limiting or refusing, which
 would make the fill the first thing to remove.
+
+---
+
+## ADR-023 — A screenshot goes to the pictures directory, which is the one place bivy writes that it does not own
+
+**Status:** accepted. It amends §8 by declaring a write that was already
+happening, undeclared, to a worse place.
+
+### What prompted it
+
+A jpg appeared in a checkout and sat there across a dozen commits, kept out of
+each one by hand.
+
+mpv binds a key to a screenshot and writes it to `screenshot-dir`, whose
+default is empty, which means the working directory it inherited. bivy launches
+mpv from wherever bivy was started, so pressing that key put a frame of a video
+in whatever directory that happened to be — a source tree, in the case that
+found this.
+
+So §8's claim that exactly two directories are ever written was already untrue
+for anyone who pressed it. The violation was not that bivy chose a bad place;
+it was that bivy chose no place.
+
+### What was measured
+
+Against the installed mpv, through its IPC socket rather than by reading
+documentation:
+
+| asked | answer |
+|---|---|
+| does `--screenshot-directory` still work | yes; the file landed there |
+| if the directory does not exist | mpv creates it |
+| does anything still reach the working directory | no, in either case |
+
+The default template is `mpv-shot%n` and the default format is jpg, which is
+what the file in the checkout was.
+
+### The decision
+
+bivy passes `--screenshot-directory`. It resolves to what the caller asked
+for, else `XDG_PICTURES_DIR` where that names an absolute path, else
+`Pictures` under the home directory — which is the conventional place on both
+platforms bivy ships for. Where no home can be found the flag is left off
+entirely, which returns mpv to its own default rather than passing it an empty
+string.
+
+Only an absolute path is taken, because this value reaches an argv (§7).
+
+### The argument against
+
+This is a write outside the two directories §8 names, and worse, bivy now
+nominates a directory in the person's home that it does not own and does not
+create. A reader auditing the write set has a third place to think about.
+
+What answers it is that the write was already happening and the only question
+was where. It happens on a keypress and never otherwise; a first launch
+presses nothing, so the isolation test's write set is unchanged and still
+exact. And what lands there is the person's own output rather than bivy's
+state — bivy keeps nothing in it and never reads it back.
+
+The alternative worth naming is removing the capability instead of aiming it.
+That would mean rebinding mpv's keys over the IPC socket, which is reaching
+further into someone's player than passing it flags, and it would take away
+something a person may well want. Choosing a directory is the smaller
+intrusion.
+
+### What survives it
+
+ADR-006 — mpv still runs with `--no-config` and explicit flags, and nothing of
+the user's own mpv setup is read or written. ADR-005 — bivy still downloads
+nothing; a screenshot is a frame somebody asked their own player for, not
+content bivy fetched. ADR-007 — pictures bivy fetches still live in memory
+only. The isolation test is untouched and still asserts the write set exactly.
+
+### What it costs, said on screen
+
+Nothing is said on screen. The person pressed a key in mpv and mpv reports the
+filename it wrote, as it always did.
+
+**What would reopen this:** a platform where that directory is not the
+convention, or evidence that people would rather bivy's player took no
+screenshots at all.

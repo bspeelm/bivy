@@ -280,6 +280,14 @@ macOS honours the XDG variables when they are set, and uses the Apple paths
 otherwise. The mpv IPC socket lives under the runtime directory and is removed
 on exit; it is a socket, not a directory bivy owns.
 
+One file is written outside both, and only on request: a screenshot, which mpv
+writes into the pictures directory because bivy tells it to (ADR-023). Before
+that it went into whatever directory bivy had been started from, which is the
+same promise broken less deliberately. It is the person's output rather than
+bivy's state — bivy puts nothing there itself and never reads it back — and a
+launch that presses no key writes none, which is why the write set below is
+still exact.
+
 There is **no cache directory**. Thumbnails live in memory for the session
 (ADR-007). There is no partial-file residue anywhere, because bivy does not
 download (ADR-005).

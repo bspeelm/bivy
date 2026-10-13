@@ -321,7 +321,7 @@ func TestPlayRefusesAVideoThatIsNotOne(t *testing.T) {
 
 // The socket carries what the user is watching, and argv is world-readable.
 func TestNothingUserControlledReachesTheArgv(t *testing.T) {
-	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/cookies.txt", true)
+	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/cookies.txt", "/shots", true)
 
 	for _, a := range args {
 		if !strings.HasPrefix(a, "--") {
@@ -347,8 +347,50 @@ func TestNothingUserControlledReachesTheArgv(t *testing.T) {
 // desktop before this test existed — and on a compositor that offers no
 // decorations they have no title bar to close them by.
 func TestAnIdlePlayerPutsNoWindowUp(t *testing.T) {
-	if contains(flags("/run/somewhere/mpv.sock", "/run/somewhere/cookies.txt", true), "--force-window") {
+	if contains(flags("/run/somewhere/mpv.sock", "/run/somewhere/cookies.txt", "/shots", true), "--force-window") {
 		t.Error("bivy forces a window, which means an empty one whenever nothing is playing")
+	}
+}
+
+// mpv's screenshot key writes into the working directory it inherited, so a
+// frame of a video landed wherever bivy had been started from — a checkout,
+// in the case that found this. ADR-023 sends it somewhere a person would look.
+func TestAScreenshotDoesNotLandInTheWorkingDirectory(t *testing.T) {
+	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, "/pictures", true)
+	if !contains(args, "--screenshot-directory") {
+		t.Fatalf("no screenshot directory in %v", args)
+	}
+	for _, a := range args {
+		dir, ok := strings.CutPrefix(a, "--screenshot-directory=")
+		if !ok {
+			continue
+		}
+		if !filepath.IsAbs(dir) {
+			t.Errorf("the screenshot directory %q is not an absolute path", dir)
+		}
+	}
+
+	// Nowhere to put it is mpv's own default left alone, not an empty flag.
+	bare := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, "", true)
+	if contains(bare, "--screenshot-directory") {
+		t.Errorf("a screenshot directory was passed with nowhere to put it: %v", bare)
+	}
+}
+
+// §7: nothing that is not an absolute path reaches an argv, and this value
+// comes from the environment.
+func TestTheScreenshotDirectoryTakesOnlyAnAbsolutePath(t *testing.T) {
+	t.Setenv("XDG_PICTURES_DIR", "/desktop/pictures")
+	if got := shotDir(""); got != "/desktop/pictures" {
+		t.Errorf("shotDir() = %q, want what the desktop names", got)
+	}
+	if got := shotDir("/asked/for"); got != "/asked/for" {
+		t.Errorf("shotDir(%q) = %q, want the caller's", "/asked/for", got)
+	}
+
+	t.Setenv("XDG_PICTURES_DIR", "-nonsense")
+	if got := shotDir(""); got == "-nonsense" || (got != "" && !filepath.IsAbs(got)) {
+		t.Errorf("shotDir() = %q, which is not an absolute path", got)
 	}
 }
 
@@ -721,7 +763,7 @@ func TestTheJarGoesWithTheSocketDirectory(t *testing.T) {
 // The cookie mpv is pointed at must be the one bivy owns and replaces, not a
 // path it inherited from somewhere.
 func TestTheCookieFlagPointsAtTheJarBivyWrote(t *testing.T) {
-	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, true)
+	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, "/shots", true)
 
 	var found bool
 	for _, a := range args {
@@ -748,12 +790,12 @@ func TestTheCookieFlagPointsAtTheJarBivyWrote(t *testing.T) {
 func TestTheWindowKeepsTheSizeItWasGiven(t *testing.T) {
 	const flag = "--auto-window-resize=no"
 
-	kept := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, true)
+	kept := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, "/shots", true)
 	if !contains(kept, flag) {
 		t.Error("mpv is left to resize its own window, so each video undoes the last size")
 	}
 
-	old := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, false)
+	old := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, "/shots", false)
 	if contains(old, flag) {
 		t.Errorf("%s reaches an mpv too old for it, which is an mpv that will not start", flag)
 	}
@@ -786,7 +828,7 @@ func TestOnlyANewEnoughMPVIsToldToKeepItsWindow(t *testing.T) {
 // it. Measured on a 1920x1080 screen: a 4K video gave a 1920x1080 window
 // without this, and 1344x756 with it.
 func TestTheFirstWindowOpensSmallerThanTheScreen(t *testing.T) {
-	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, true)
+	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, "/shots", true)
 
 	var fit string
 	for _, a := range args {
