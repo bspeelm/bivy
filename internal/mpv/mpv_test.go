@@ -779,6 +779,17 @@ func TestTheCookieFlagPointsAtTheJarBivyWrote(t *testing.T) {
 	}
 }
 
+func TestVideoIsDecodedByNvidiasDecoderAndNotLeftToAuto(t *testing.T) {
+	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, "/shots", true)
+
+	if !contains(args, "--hwdec=nvdec") {
+		t.Errorf("mpv is not asked for the decoder that held up on AV1: %q", args)
+	}
+	if contains(args, "--hwdec=auto") {
+		t.Errorf("auto can choose the Vulkan decoder, which deadlocks on AV1: %q", args)
+	}
+}
+
 func TestMpvIsGivenTheProxyOnlyWhenOneWasAskedFor(t *testing.T) {
 	if got := proxyFlags(""); got != nil {
 		t.Errorf("going direct should add no flag, got %q", got)
