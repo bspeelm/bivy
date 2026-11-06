@@ -71,6 +71,8 @@ func TestTheStatusLineNamesTheReason(t *testing.T) {
 func TestDetectReadsWhatTheServiceSaid(t *testing.T) {
 	pushing := map[string]string{
 		"ERROR: [youtube] abc: Sign in to confirm you're not a bot":            BotCheck,
+		"ERROR: [youtube] abc: Sign in to confirm you’re not a bot":            BotCheck,
+		"the search failed: Sign in to confirm you are not a bot":              BotCheck,
 		"ERROR: Unable to download webpage: HTTP Error 429: Too Many Requests": RateLimited,
 		"<html><title>Before you continue to YouTube</title>":                  BotCheck,
 		"https://consent.youtube.com/m?continue=...":                           BotCheck,
@@ -92,6 +94,7 @@ func TestDetectReadsWhatTheServiceSaid(t *testing.T) {
 	// stop a session for a channel that simply moved.
 	for _, ordinary := range []string{
 		"ERROR: [youtube] abc: Video unavailable",
+		"ERROR: [youtube] abc: Sign in to confirm your age. This video may be inappropriate for some users.",
 		"404 Not Found",
 		"dial tcp: lookup www.youtube.com: no such host",
 		"",

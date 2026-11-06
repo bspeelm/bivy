@@ -248,6 +248,9 @@ func flags(socket, cookies, shots string, keepWindow bool) []string {
 		// The hardware decode path. Since mpv 0.29.0; before that it was
 		// spelled --vo=opengl, which is the gate this constant names.
 		"--vo=gpu",
+		// Named, because auto picks Vulkan, which deadlocks on AV1. Elsewhere this
+		// falls back to the processor.
+		"--hwdec=nvdec",
 		// bivy owns the terminal, and mpv writing status lines into the
 		// screen bivy is drawing is the most visible way this goes wrong.
 		"--terminal=no",
