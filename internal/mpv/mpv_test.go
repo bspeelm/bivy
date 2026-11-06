@@ -779,6 +779,14 @@ func TestTheCookieFlagPointsAtTheJarBivyWrote(t *testing.T) {
 	}
 }
 
+func TestVideoIsAskedForInShortRequestsSoHighBitratesCanKeepUp(t *testing.T) {
+	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, "/shots", true)
+
+	if !contains(args, "--stream-lavf-o-append=request_size="+requestSize) {
+		t.Errorf("mpv is not told to use short requests: %q", args)
+	}
+}
+
 // One mpv serves the whole session, so a window resized by hand should be
 // resized once. Left to itself mpv fits the window to each new video, which
 // undoes that on the next one -- and the window is the thing being watched.

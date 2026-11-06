@@ -34,6 +34,9 @@ const Minimum = "0.29.0"
 // A fraction, because a number in pixels is wrong on every screen but one.
 const openAtMost = "70%x70%"
 
+// requestSize is in bytes: the video host throttles one long request, not many short ones.
+const requestSize = "5000000"
+
 // keepsWindowSince is when mpv learned to leave its window alone. Older ones
 // refuse to start on an option they do not know, so this is asked not assumed.
 const keepsWindowSince = "0.36.0"
@@ -250,6 +253,7 @@ func flags(socket, cookies, shots string, keepWindow bool) []string {
 		"--autofit-larger=" + openAtMost,
 		// The session's visitor, rewritten before every video (ADR-018).
 		"--ytdl-raw-options=cookies=" + cookies,
+		"--stream-lavf-o-append=request_size=" + requestSize,
 	}
 
 	// mpv's screenshot key writes to the working directory it inherited, which

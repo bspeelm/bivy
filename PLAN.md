@@ -203,7 +203,8 @@ mpv is launched idle with an IPC socket and given work over it, rather than
 handed a URL and abandoned. That buys pause, seek, position and
 end-of-playback, and it keeps the stream URL out of `argv`. `--no-config`, and
 `--vo=gpu` so the decode path is the hardware one. Version-gated flags name the
-mpv version that makes the gate deletable.
+mpv version that makes the gate deletable. Video is asked for in short requests,
+because the video host slows one long request to near the playback rate.
 
 ---
 
