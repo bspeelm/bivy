@@ -85,6 +85,12 @@ func New() *Client {
 	}
 }
 
+// UseProxy sends every request through proxy, with no fallback to going direct:
+// someone who asked for this may be relying on it to hide their address.
+func (c *Client) UseProxy(proxy *url.URL) {
+	c.http.Transport = &http.Transport{Proxy: http.ProxyURL(proxy)}
+}
+
 // Fetch returns what a channel's feed currently carries. This runs at launch,
 // once per followed channel, and carries no credential, no cookie and no
 // parameter that identifies anyone — only the channel asked about (ADR-003).

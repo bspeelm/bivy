@@ -97,6 +97,8 @@ type Options struct {
 	// ShotDir is where mpv puts a screenshot. Empty means the pictures
 	// directory (ADR-023).
 	ShotDir string
+	// Proxy is the address mpv and its extractor go through. Empty means direct.
+	Proxy string
 }
 
 // Player is a running mpv.
@@ -178,6 +180,7 @@ func Start(ctx context.Context, opt Options) (*Player, error) {
 
 	args := append(append([]string(nil), opt.Args...),
 		flags(socket, cookies, shotDir(opt.ShotDir), keepsWindow(ctx, binary))...)
+	args = append(args, proxyFlags(opt.Proxy)...)
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = opt.Env
 	// Streams left nil, which exec connects to the null device: mpv's own
@@ -268,6 +271,15 @@ func flags(socket, cookies, shots string, keepWindow bool) []string {
 		return append(base, "--auto-window-resize=no")
 	}
 	return base
+}
+
+// proxyFlags names the proxy twice because mpv keeps two routes: --http-proxy
+// covers what mpv fetches, and its extractor hook reads only the raw options.
+func proxyFlags(proxy string) []string {
+	if proxy == "" {
+		return nil
+	}
+	return []string{"--http-proxy=" + proxy, "--ytdl-raw-options-append=proxy=" + proxy}
 }
 
 // keepsWindow reports whether this mpv understands being told not to resize

@@ -291,6 +291,29 @@ func standInExtractor(t *testing.T) string {
 	return path
 }
 
+func TestTheExtractorIsGivenTheProxyOnlyWhenOneWasAskedFor(t *testing.T) {
+	direct := &Client{Binary: standInExtractor(t)}
+	out, err := direct.run(context.Background(), "--", "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "--proxy") {
+		t.Errorf("going direct should not mention a proxy:\n%s", out)
+	}
+
+	proxied := &Client{Binary: standInExtractor(t), Proxy: "http://127.0.0.1:8888"}
+	out, err = proxied.run(context.Background(), "--", "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "--proxy\nhttp://127.0.0.1:8888\n") {
+		t.Errorf("the proxy did not reach the extractor:\n%s", out)
+	}
+	if !strings.HasSuffix(strings.Split(out, "JAR EXISTS")[0], "--\ntarget\n") {
+		t.Errorf("the target must stay last, behind --:\n%s", out)
+	}
+}
+
 // Search goes through the extractor too, so it carries the session's visitor
 // like everything else (ADR-018). What must never appear here is an account.
 func TestEverySearchIsTheSameVisitor(t *testing.T) {

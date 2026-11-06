@@ -43,6 +43,9 @@ type Client struct {
 
 	// Gate records the service having pushed back; a nil gate never shuts.
 	Gate *pushback.Gate
+
+	// Proxy is the address every request goes through. Empty means direct.
+	Proxy string
 }
 
 func New() *Client { return &Client{} }
@@ -94,7 +97,7 @@ func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 		return "", err
 	}
 
-	cmd := exec.CommandContext(ctx, binary, append([]string{
+	options := []string{
 		"--flat-playlist",
 		"--dump-json",
 		"--no-warnings",
@@ -102,7 +105,11 @@ func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 		"--no-playlist",
 		"--sleep-requests", sleepRequests,
 		"--cookies", cookies,
-	}, args...)...)
+	}
+	if c.Proxy != "" {
+		options = append(options, "--proxy", c.Proxy)
+	}
+	cmd := exec.CommandContext(ctx, binary, append(options, args...)...)
 
 	var stderr strings.Builder
 	cmd.Stderr = &stderr

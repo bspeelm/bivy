@@ -15,7 +15,7 @@ in total, which is what makes that a claim you can check rather than one you
 have to take.
 
 None of that hides the address you connect from, and no program can. For that,
-run bivy behind a VPN.
+run bivy behind a VPN, or [send it through a proxy](#sending-it-through-a-proxy).
 
 ## Status
 
@@ -136,6 +136,34 @@ One picture at a time, for the row you are looking at, kept in memory for the
 session and written nowhere. There is no thumbnail cache, because a
 thumbnail cache is a viewing history in image form in a directory you did not
 create.
+
+## Sending it through a proxy
+
+bivy connects directly unless you tell it otherwise. This is optional, and
+nothing is needed for bivy to work without it.
+
+    bivy --proxy http://127.0.0.1:8888
+
+Feeds, thumbnails, search and video all then go through that address, and the
+service sees the proxy's address rather than yours. If the proxy cannot be
+reached, requests fail and bivy never tries going direct instead. A malformed
+address stops bivy before it sends anything (ADR-024).
+
+The option applies to one run, so running `bivy` without it connects directly.
+If you always want it, use a shell alias.
+
+The address must be `http://host:port`. It appears on mpv's command line, where
+other accounts on the machine can read it, so an address holding a password is
+refused. To use a proxy on another machine, forward it over SSH:
+
+    ssh -N -L 8888:127.0.0.1:8888 you@your-server
+
+What the proxy can see is which hosts you connect to. Traffic to them stays
+encrypted. Your follows and watch history stay on your machine.
+
+If playback hangs while `curl` works through the same proxy, check its reply to
+`CONNECT`. A proxy that adds `Transfer-Encoding` there makes ffmpeg try to decode
+the encrypted stream, and mpv stalls.
 
 ## What it will not do
 

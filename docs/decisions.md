@@ -1269,3 +1269,75 @@ filename it wrote, as it always did.
 **What would reopen this:** a platform where that directory is not the
 convention, or evidence that people would rather bivy's player took no
 screenshots at all.
+
+---
+
+## ADR-024 — A proxy is offered, off by default, and never falls back to going direct
+
+**Status:** accepted. It amends §9 without adding a kind of request, and leaves
+ADR-001's position on the address unchanged: hiding it is still the job of
+something other than bivy.
+
+### What prompted it
+
+The service can refuse a whole household's address for a day or two. The same
+client behind a VPN exit was not refused in the same period, but a VPN on the
+machine covers everything else on it too, and can be slow enough that someone
+switches it off and forgets. Sending only bivy through a VPN running elsewhere
+needs bivy to accept a proxy.
+
+### The argument against
+
+ADR-001 says the address is not this program's to solve, and this looks like the
+start of solving it. Honouring the usual proxy variables already works for feeds
+and the extractor, so an option looks like surface for something the environment
+provides. It also sets an expectation: someone who passes `--proxy` believes they
+are covered, and a single request that leaves directly breaks that silently.
+
+### What survives it
+
+The environment is the reason for an option rather than the answer. A variable
+that is unset, or lost crossing a process boundary, sends traffic direct and says
+nothing, which is the failure this exists to prevent. An option that bivy parses
+can refuse to run when it is wrong, and bivy passes it explicitly to all three
+programs that reach the network.
+
+bivy runs no proxy, opens no tunnel and holds no credential for one. It is given
+an address and uses it, so the VPN remains the user's and ADR-001 stands.
+
+### The decision
+
+Off by default. With no option, bivy behaves exactly as it does without this
+record, and nothing is required for it to work.
+
+- `--proxy http://host:port` is recognised anywhere in the arguments, because an
+  option ignored for being in the wrong place would go direct.
+- A missing, malformed or repeated address stops bivy before it sends anything.
+- `internal/feed` uses the address with no fallback, and the extractor gets
+  `--proxy`.
+- mpv is told twice. `--http-proxy` covers what mpv fetches, but its extractor
+  hook ignores that and reads only `--ytdl-raw-options`. Given the first alone,
+  the lookup leaves directly while the video goes through the proxy, and playback
+  looks normal.
+- A password is refused, because the address reaches an argv (§7).
+
+Tests: `TestABadProxyOptionStopsBivyRatherThanGoingDirect`,
+`TestAProxyThatIsDownFailsRatherThanGoingDirect`,
+`TestUseProxySendsRequestsThroughTheProxy`,
+`TestTheExtractorIsGivenTheProxyOnlyWhenOneWasAskedFor`,
+`TestMpvIsGivenTheProxyOnlyWhenOneWasAskedFor`,
+`TestMpvsExtractorIsToldAboutTheProxySeparately`.
+
+### What it costs
+
+Forgetting the option goes direct, and bivy cannot tell that it should have been
+given one. Exit addresses are shared, so the session's visitor identifier becomes
+what links a sitting, as ADR-018 records. A proxy that mishandles `CONNECT` can
+stall playback while everything else works, and the README says how to recognise
+that. That mpv and its extractor keep to the proxy was checked by hand, by watching
+their connections during playback, because a test may not require mpv or the
+network; each release's review packet says so.
+
+**What would reopen this:** a request found leaving directly while the option is
+set, which is a defect to fix. Or a demand to authenticate to the proxy, which
+would need a route for the password other than an argv.

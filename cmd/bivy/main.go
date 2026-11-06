@@ -82,11 +82,19 @@ type app struct {
 	// One gate for everything: a refusal to the extractor is a refusal to the
 	// feeds as well (ADR-017).
 	gate *pushback.Gate
+
+	proxied bool
 }
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
+	proxy, args, err := takeProxy(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "bivy:", err)
+		os.Exit(2)
+	}
 
 	s, err := store.Open()
 	if err != nil {
@@ -97,6 +105,13 @@ func main() {
 	gate := &pushback.Gate{}
 	feeds, search := feed.New(), ytdlp.New()
 	feeds.Gate, search.Gate = gate, gate
+
+	var proxyAddress string
+	if proxy != nil {
+		proxyAddress = proxy.String()
+		feeds.UseProxy(proxy)
+		search.Proxy = proxyAddress
+	}
 
 	a := &app{
 		store:     s,
@@ -109,9 +124,55 @@ func main() {
 		now:       time.Now,
 		out:       os.Stdout,
 		errOut:    os.Stderr,
-		newPlayer: startMPV,
+		newPlayer: startMPV(proxyAddress),
+		proxied:   proxy != nil,
 	}
-	os.Exit(a.run(ctx, os.Args[1:]))
+	os.Exit(a.run(ctx, args))
+}
+
+// takeProxy lifts --proxy out of the arguments wherever it appears. Anything
+// wrong with it is an error rather than a run without it: going direct by
+// accident is the failure this option exists to prevent (ADR-024).
+func takeProxy(args []string) (*url.URL, []string, error) {
+	var proxy *url.URL
+	rest := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		address, found := strings.CutPrefix(args[i], "--proxy=")
+		if !found {
+			if args[i] != "--proxy" {
+				rest = append(rest, args[i])
+				continue
+			}
+			i++
+			if i == len(args) {
+				return nil, nil, errors.New("--proxy needs an address, like http://127.0.0.1:8888")
+			}
+			address = args[i]
+		}
+		if proxy != nil {
+			return nil, nil, errors.New("--proxy was given twice")
+		}
+		parsed, err := parseProxy(address)
+		if err != nil {
+			return nil, nil, err
+		}
+		proxy = parsed
+	}
+	return proxy, rest, nil
+}
+
+// parseProxy accepts http://host:port and nothing else: ffmpeg speaks no other
+// kind of proxy, and this address reaches an argv, so it may not hold a password.
+func parseProxy(address string) (*url.URL, error) {
+	u, err := url.Parse(address)
+	if err != nil || u.Scheme != "http" || u.Hostname() == "" || u.Port() == "" ||
+		u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("%q is not a proxy address like http://127.0.0.1:8888", media.Text(address))
+	}
+	if u.User != nil {
+		return nil, errors.New("a proxy address may not hold a password: it would be readable on a command line")
+	}
+	return u, nil
 }
 
 const usage = `bivy — a terminal browser and player for online video
@@ -122,6 +183,9 @@ const usage = `bivy — a terminal browser and player for online video
     bivy unfollow <channel> stop following one
     bivy list               the channels you follow
     bivy version            what this is
+
+    --proxy http://host:port   send everything through this proxy, and fail
+                               rather than go direct if it cannot be reached
 
 Once bivy is open, most of it is keys rather than commands:
 
@@ -196,11 +260,12 @@ func (a *app) dashboard(ctx context.Context) int {
 
 	rows := follow.Dashboard(state, fetched, dashboardRows)
 	fmt.Fprint(a.out, tui.Render(tui.Dashboard{
-		Rows:   rows,
-		Failed: failed,
-		Status: a.gate.Says(),
-		Now:    a.now(),
-		Width:  a.width,
+		Proxied: a.proxied,
+		Rows:    rows,
+		Failed:  failed,
+		Status:  a.gate.Says(),
+		Now:     a.now(),
+		Width:   a.width,
 	}))
 
 	if len(state.Channels) == 0 {

@@ -316,6 +316,8 @@ bivy makes exactly three kinds of outbound request:
    and only then: a channel whose feed would not answer is listed by the
    extractor instead (ADR-013).
 
+An optional proxy changes the route of these three and adds no fourth (ADR-024).
+
 Nothing else. No analytics, no update check, no crash reporting, no ping. The
 budget in §0 is what makes this checkable rather than merely stated: one
 package imports `net/http`, and a reviewer can read it in an afternoon. The

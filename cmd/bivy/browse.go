@@ -1343,6 +1343,7 @@ func (b *browser) draw() error {
 		Rows:        b.rows,
 		Failed:      b.failedNow(),
 		Reached:     len(b.fetched),
+		Proxied:     b.app.proxied,
 		Stale:       b.stale && b.query == "",
 		Now:         b.app.now(),
 		Width:       width,
@@ -1416,8 +1417,10 @@ func tidy(detail string) string {
 }
 
 // startMPV is the real player. The only place in bivy that launches one.
-func startMPV(ctx context.Context) (player, error) {
-	return mpv.Start(ctx, mpv.Options{})
+func startMPV(proxy string) func(context.Context) (player, error) {
+	return func(ctx context.Context) (player, error) {
+		return mpv.Start(ctx, mpv.Options{Proxy: proxy})
+	}
 }
 
 // playerTrouble turns a failure to start mpv into a line that says what to do.
