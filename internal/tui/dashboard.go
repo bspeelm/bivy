@@ -43,6 +43,9 @@ type Dashboard struct {
 	// is quietly short lies.
 	Failed  []string
 	Reached int
+	// Proxied is whether bivy was told to go through a proxy, which is then the
+	// likelier reason nothing answers.
+	Proxied bool
 	// Stale means some rows came from the extractor rather than a feed, and
 	// so carry no publish time. Said plainly, because a dashboard silently
 	// missing the thing it sorts by is a dashboard nobody can trust.
@@ -434,6 +437,9 @@ func status(d Dashboard) string {
 		// not. When none did, the channels are not what went wrong, and a
 		// list of them reads as four separate problems.
 		if d.Reached == 0 && len(d.Failed) > 1 {
+			if d.Proxied {
+				return "no feeds are answering — check that the proxy is running; bivy will not go direct"
+			}
 			return "no feeds are answering — the service is refusing them, which is usually brief"
 		}
 		return fmt.Sprintf("%s could not be reached: %s",

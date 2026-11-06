@@ -779,6 +779,33 @@ func TestTheCookieFlagPointsAtTheJarBivyWrote(t *testing.T) {
 	}
 }
 
+func TestMpvIsGivenTheProxyOnlyWhenOneWasAskedFor(t *testing.T) {
+	if got := proxyFlags(""); got != nil {
+		t.Errorf("going direct should add no flag, got %q", got)
+	}
+	got := proxyFlags("http://127.0.0.1:8888")
+	if !contains(got, "--http-proxy=http://127.0.0.1:8888") {
+		t.Errorf("the proxy did not reach mpv: %q", got)
+	}
+}
+
+// mpv's extractor hook ignores --http-proxy, so without this flag the lookup
+// leaves directly while the video goes through the proxy.
+func TestMpvsExtractorIsToldAboutTheProxySeparately(t *testing.T) {
+	got := proxyFlags("http://127.0.0.1:8888")
+	if !contains(got, "--ytdl-raw-options-append=proxy=http://127.0.0.1:8888") {
+		t.Errorf("the extractor hook is not given the proxy: %q", got)
+	}
+}
+
+func TestVideoIsAskedForInShortRequestsSoHighBitratesCanKeepUp(t *testing.T) {
+	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, "/shots", true)
+
+	if !contains(args, "--stream-lavf-o-append=request_size="+requestSize) {
+		t.Errorf("mpv is not told to use short requests: %q", args)
+	}
+}
+
 // One mpv serves the whole session, so a window resized by hand should be
 // resized once. Left to itself mpv fits the window to each new video, which
 // undoes that on the next one -- and the window is the thing being watched.

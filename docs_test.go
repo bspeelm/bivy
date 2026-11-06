@@ -559,3 +559,17 @@ func lineContaining(t *testing.T, text, sub string) string {
 	t.Fatalf("no line contains %q", sub)
 	return ""
 }
+
+// The proxy is opt-in, so someone can only find it by reading about it, and the
+// two places they would look must agree.
+func TestTheProxyOptionIsDocumentedWhereItIsOffered(t *testing.T) {
+	for _, file := range []string{"README.md", "cmd/bivy/main.go"} {
+		body, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(body), "--proxy http://") {
+			t.Errorf("%s does not show how to use --proxy", file)
+		}
+	}
+}

@@ -203,7 +203,8 @@ mpv is launched idle with an IPC socket and given work over it, rather than
 handed a URL and abandoned. That buys pause, seek, position and
 end-of-playback, and it keeps the stream URL out of `argv`. `--no-config`, and
 `--vo=gpu` so the decode path is the hardware one. Version-gated flags name the
-mpv version that makes the gate deletable.
+mpv version that makes the gate deletable. Video is asked for in short requests,
+because the video host slows one long request to near the playback rate.
 
 ---
 
@@ -314,6 +315,8 @@ bivy makes exactly three kinds of outbound request:
    session and discards when it exits (ADR-018). One of them runs at launch,
    and only then: a channel whose feed would not answer is listed by the
    extractor instead (ADR-013).
+
+An optional proxy changes the route of these three and adds no fourth (ADR-024).
 
 Nothing else. No analytics, no update check, no crash reporting, no ping. The
 budget in §0 is what makes this checkable rather than merely stated: one

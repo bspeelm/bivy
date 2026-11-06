@@ -642,6 +642,13 @@ func TestWithoutAPictureNothingIsIndented(t *testing.T) {
 // Naming the channels is right when some got through. When none did, they are
 // not what went wrong, and a list of them reads as four separate problems
 // rather than one.
+func TestWhenNothingAnswersThroughAProxyItPointsAtTheProxy(t *testing.T) {
+	got := status(Dashboard{Failed: []string{"Aye", "Bee"}, Proxied: true})
+	if !strings.Contains(got, "proxy") || strings.Contains(got, "refusing") {
+		t.Errorf("status = %q, want it to point at the proxy", got)
+	}
+}
+
 func TestWhenNoFeedAnswersItSaysSoOnce(t *testing.T) {
 	none := status(Dashboard{Failed: []string{"Aye", "Bee", "Cee"}, Reached: 0})
 	if strings.Contains(none, "Aye") {

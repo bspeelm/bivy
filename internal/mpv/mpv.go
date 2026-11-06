@@ -34,6 +34,9 @@ const Minimum = "0.29.0"
 // A fraction, because a number in pixels is wrong on every screen but one.
 const openAtMost = "70%x70%"
 
+// requestSize is in bytes: the video host throttles one long request, not many short ones.
+const requestSize = "5000000"
+
 // keepsWindowSince is when mpv learned to leave its window alone. Older ones
 // refuse to start on an option they do not know, so this is asked not assumed.
 const keepsWindowSince = "0.36.0"
@@ -94,6 +97,8 @@ type Options struct {
 	// ShotDir is where mpv puts a screenshot. Empty means the pictures
 	// directory (ADR-023).
 	ShotDir string
+	// Proxy is the address mpv and its extractor go through. Empty means direct.
+	Proxy string
 }
 
 // Player is a running mpv.
@@ -175,6 +180,7 @@ func Start(ctx context.Context, opt Options) (*Player, error) {
 
 	args := append(append([]string(nil), opt.Args...),
 		flags(socket, cookies, shotDir(opt.ShotDir), keepsWindow(ctx, binary))...)
+	args = append(args, proxyFlags(opt.Proxy)...)
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = opt.Env
 	// Streams left nil, which exec connects to the null device: mpv's own
@@ -250,6 +256,7 @@ func flags(socket, cookies, shots string, keepWindow bool) []string {
 		"--autofit-larger=" + openAtMost,
 		// The session's visitor, rewritten before every video (ADR-018).
 		"--ytdl-raw-options=cookies=" + cookies,
+		"--stream-lavf-o-append=request_size=" + requestSize,
 	}
 
 	// mpv's screenshot key writes to the working directory it inherited, which
@@ -264,6 +271,15 @@ func flags(socket, cookies, shots string, keepWindow bool) []string {
 		return append(base, "--auto-window-resize=no")
 	}
 	return base
+}
+
+// proxyFlags names the proxy twice because mpv keeps two routes: --http-proxy
+// covers what mpv fetches, and its extractor hook reads only the raw options.
+func proxyFlags(proxy string) []string {
+	if proxy == "" {
+		return nil
+	}
+	return []string{"--http-proxy=" + proxy, "--ytdl-raw-options-append=proxy=" + proxy}
 }
 
 // keepsWindow reports whether this mpv understands being told not to resize

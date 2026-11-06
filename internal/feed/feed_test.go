@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,6 +32,53 @@ func against(t *testing.T, h http.HandlerFunc) *Client {
 	c.PageBase = srv.URL
 	c.ThumbBase = srv.URL + "/vi/"
 	return c
+}
+
+func TestUseProxySendsRequestsThroughTheProxy(t *testing.T) {
+	var direct atomic.Int32
+	c := against(t, func(http.ResponseWriter, *http.Request) { direct.Add(1) })
+
+	var proxied atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxied.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(proxy.Close)
+	address, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.UseProxy(address)
+
+	if _, err := c.Fetch(context.Background(), "UCaaaaaaaaaaaaaaaaaaaaaa"); err == nil {
+		t.Error("the proxy answered 404, so this should have failed")
+	}
+	if proxied.Load() == 0 {
+		t.Error("the request did not go through the proxy")
+	}
+	if direct.Load() != 0 {
+		t.Errorf("%d requests went direct", direct.Load())
+	}
+}
+
+func TestAProxyThatIsDownFailsRatherThanGoingDirect(t *testing.T) {
+	var direct atomic.Int32
+	c := against(t, func(http.ResponseWriter, *http.Request) { direct.Add(1) })
+
+	proxy := httptest.NewServer(http.NotFoundHandler())
+	address, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy.Close()
+	c.UseProxy(address)
+
+	if _, err := c.Fetch(context.Background(), "UCaaaaaaaaaaaaaaaaaaaaaa"); err == nil {
+		t.Error("nothing is listening, so this should have failed")
+	}
+	if direct.Load() != 0 {
+		t.Errorf("%d requests went direct when the proxy was down", direct.Load())
+	}
 }
 
 func TestFetchReadsAChannel(t *testing.T) {
