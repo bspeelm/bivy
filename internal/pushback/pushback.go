@@ -86,7 +86,7 @@ var challenges = []struct {
 	{"error 429", RateLimited},
 	{"confirm you're not a bot", BotCheck},
 	{"confirm you’re not a bot", BotCheck},
-	{"sign in to confirm", BotCheck},
+	{"confirm you are not a bot", BotCheck},
 	{"unusual traffic", BotCheck},
 	{"consent.youtube.com", BotCheck},
 	{"before you continue to youtube", BotCheck},

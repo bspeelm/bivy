@@ -14,6 +14,7 @@ import (
 	"github.com/bspeelm/bivy/internal/graphics"
 	"github.com/bspeelm/bivy/internal/media"
 	"github.com/bspeelm/bivy/internal/mpv"
+	"github.com/bspeelm/bivy/internal/pushback"
 	"github.com/bspeelm/bivy/internal/term"
 	"github.com/bspeelm/bivy/internal/tui"
 	"github.com/bspeelm/bivy/internal/ytdlp"
@@ -2086,6 +2087,32 @@ func TestHidingAppliesToSearchResultsToo(t *testing.T) {
 // extractor. It arrives wrapped in the extractor's own conventions — the video
 // it failed on, and two links to its documentation — none of which belongs on
 // a status line beside the row it failed for.
+// bivy holds no account, so an age-restricted video cannot play. That is one
+// video refusing, not the service refusing bivy, and the session carries on.
+func TestAnAgeRestrictedVideoDoesNotStopTheSession(t *testing.T) {
+	b := newBrowser(t)
+	b.app.gate = &pushback.Gate{}
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+	b.screen.press(named(term.KeyEnter))
+	b.eventually(t, "playing ·")
+
+	b.player.events <- mpv.Event{
+		Name:   "end-file",
+		Reason: "error",
+		Detail: "ERROR: [youtube] aaaaaaaaaaa: Sign in to confirm your age. " +
+			"This video may be inappropriate for some users.",
+	}
+	b.eventually(t, "Sign in to confirm your age")
+	b.quit(t)
+
+	if b.app.gate.Shut() {
+		t.Errorf("one age-restricted video stopped the session: %q", b.app.gate.Says())
+	}
+}
+
 func TestTheRefusalReachesTheScreenInWordsAnyoneCanRead(t *testing.T) {
 	b := newBrowser(t)
 	b.run(t, "follow", chanA)
