@@ -413,6 +413,29 @@ func TestBrowseDrawsTheDashboard(t *testing.T) {
 	}
 }
 
+func TestTheScreenIsDrawnBeforeTheFeedsHaveAnswered(t *testing.T) {
+	b := newBrowser(t)
+	b.run(t, "follow", chanA)
+
+	b.start(t)
+	b.eventually(t, "The newest thing")
+
+	b.screen.mu.Lock()
+	first := b.screen.frames[0]
+	b.screen.mu.Unlock()
+	b.quit(t)
+
+	if !strings.Contains(first, "fetching") {
+		t.Errorf("the first frame does not say bivy is fetching:\n%s", first)
+	}
+	if strings.Contains(first, "The newest thing") {
+		t.Errorf("the first frame waited for the feeds:\n%s", first)
+	}
+	if strings.Contains(first, "nothing followed") {
+		t.Errorf("the first frame claims nothing is followed before knowing:\n%s", first)
+	}
+}
+
 func TestEnterPlaysTheSelectedRow(t *testing.T) {
 	b := newBrowser(t)
 	b.run(t, "follow", chanA)

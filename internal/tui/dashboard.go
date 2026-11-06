@@ -398,6 +398,9 @@ func sides(left, right string, width int) string {
 func empty(d Dashboard, width, visible int) string {
 	var say string
 	switch {
+	case d.Busy:
+		// The heading says what is being waited for. An answer here would be
+		// about rows that have not arrived.
 	case d.Query != "":
 		say = "  nothing found for " + d.Query
 	case d.Interactive:

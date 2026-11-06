@@ -673,3 +673,27 @@ func TestTheDashboardSaysWhenTheServiceHasPushedBack(t *testing.T) {
 		t.Errorf("the dashboard does not say the service pushed back:\n%s", got)
 	}
 }
+
+func TestListOnlyDoesNotSayNoFeedsAnsweredWhenSomeDid(t *testing.T) {
+	h := newHarness(t)
+	third := "UC" + strings.Repeat("c", 22)
+	h.feeds.setChannel(third, media.Channel{ID: third, Title: "Cee", Videos: []media.Video{
+		{ID: "ddddddddddd", Title: "From the third one", Published: at(7)},
+	}})
+	for _, id := range []string{chanA, chanB, third} {
+		h.run(t, "follow", id)
+	}
+
+	h.feeds.mu.Lock()
+	delete(h.feeds.channels, chanB)
+	delete(h.feeds.channels, third)
+	h.feeds.mu.Unlock()
+
+	got := h.run(t, "list-only")
+	if strings.Contains(got, "no feeds are answering") {
+		t.Errorf("one feed answered, and it said none did:\n%s", got)
+	}
+	if !strings.Contains(got, "could not be reached") {
+		t.Errorf("it does not report the two that failed:\n%s", got)
+	}
+}

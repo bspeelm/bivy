@@ -263,6 +263,7 @@ func (a *app) dashboard(ctx context.Context) int {
 		Proxied: a.proxied,
 		Rows:    rows,
 		Failed:  failed,
+		Reached: len(fetched),
 		Status:  a.gate.Says(),
 		Now:     a.now(),
 		Width:   a.width,

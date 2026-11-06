@@ -136,6 +136,8 @@ func TestRenderDashboard(t *testing.T) {
 			resultRow("Someone Else", "A much longer one", 2*time.Hour+5*time.Minute+9*time.Second),
 		}}},
 		{"search found nothing", Dashboard{Now: now, Interactive: true, Query: "asdfghjkl"}},
+		{"still searching", Dashboard{Now: now, Interactive: true, Query: "asdfghjkl", Busy: true}},
+		{"still fetching at launch", Dashboard{Now: now, Interactive: true, Busy: true}},
 		{"channel results", Dashboard{Now: now, Interactive: true, Query: "papa meat", Channels: true, Height: 12, Rows: []follow.Row{
 			channelRow("Papa Meat", "I make cartoons on my main account", 3_590_000, false),
 			channelRow("MeatCanyon", "Oh hi i make cartoons", 9_130_000, true),
@@ -642,6 +644,16 @@ func TestWithoutAPictureNothingIsIndented(t *testing.T) {
 // Naming the channels is right when some got through. When none did, they are
 // not what went wrong, and a list of them reads as four separate problems
 // rather than one.
+func TestASearchStillRunningDoesNotSayItFoundNothing(t *testing.T) {
+	got := Render(Dashboard{Now: now, Interactive: true, Query: "anything", Busy: true})
+	if strings.Contains(got, "nothing found") || strings.Contains(got, "0 results") {
+		t.Errorf("a search still running gave its answer:\n%s", got)
+	}
+	if !strings.Contains(got, "searching for") {
+		t.Errorf("it does not say it is searching:\n%s", got)
+	}
+}
+
 func TestWhenNothingAnswersThroughAProxyItPointsAtTheProxy(t *testing.T) {
 	got := status(Dashboard{Failed: []string{"Aye", "Bee"}, Proxied: true})
 	if !strings.Contains(got, "proxy") || strings.Contains(got, "refusing") {
