@@ -779,6 +779,14 @@ func TestTheCookieFlagPointsAtTheJarBivyWrote(t *testing.T) {
 	}
 }
 
+func TestVideoIsDecodedByTheGraphicsCardWhereItCanBe(t *testing.T) {
+	args := flags("/run/somewhere/mpv.sock", "/run/somewhere/"+visitor.FileName, "/shots", true)
+
+	if !contains(args, "--hwdec=auto") {
+		t.Errorf("mpv is left decoding on the processor: %q", args)
+	}
+}
+
 func TestMpvIsGivenTheProxyOnlyWhenOneWasAskedFor(t *testing.T) {
 	if got := proxyFlags(""); got != nil {
 		t.Errorf("going direct should add no flag, got %q", got)
