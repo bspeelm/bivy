@@ -211,7 +211,15 @@ func (b *browser) run(ctx context.Context) int {
 	// be short of the channel the loop selects on.
 	b.arrived = make(chan arriving, 1)
 
-	if err := b.load(ctx); err != nil {
+	// Feeds can take a while, and a terminal showing nothing looks like a hang.
+	b.busy = true
+	if err := b.draw(); err != nil {
+		b.close()
+		return b.app.fail(err)
+	}
+	err := b.load(ctx)
+	b.busy = false
+	if err != nil {
 		b.close()
 		return b.app.fail(err)
 	}
